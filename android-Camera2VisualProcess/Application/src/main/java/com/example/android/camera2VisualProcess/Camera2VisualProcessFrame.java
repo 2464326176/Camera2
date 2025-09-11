@@ -26,6 +26,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
+import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
@@ -273,7 +274,9 @@ public class Camera2VisualProcessFrame extends Fragment
 
         @Override
         public void onImageAvailable(ImageReader reader) {
-            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile));
+            Image image = reader.acquireNextImage();
+            Log.d(TAG, "onImageAvailable: format" + image.getFormat());
+            mBackgroundHandler.post(new ImageSaver(image, mFile));
         }
 
     };
@@ -464,7 +467,8 @@ public class Camera2VisualProcessFrame extends Fragment
     @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
-        mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
+//        mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
+        mFile = new File("/sdcard/DCIM/Camera/", "pic.jpg");
     }
 
     @Override
@@ -523,14 +527,14 @@ public class Camera2VisualProcessFrame extends Fragment
 
     // 更新 processCapturedImage 方法
     private void processCapturedImage() {
-        if (ContextCompat.checkSelfPermission(getActivity(),
-                Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                == PackageManager.PERMISSION_GRANTED) {
+//        if (ContextCompat.checkSelfPermission(getActivity(),
+//                Manifest.permission.WRITE_EXTERNAL_STORAGE)
+//                == PackageManager.PERMISSION_GRANTED) {
 
-            ArcSoftImageProcessor.processImage(mFile.getAbsolutePath(), mProcessingCallback);
-        } else {
-            requestStoragePermission();
-        }
+            ArcSoftImageProcessor.processImage("/sdcard/DCIM/Camera/test.jpg", mProcessingCallback);
+//        } else {
+//            requestStoragePermission();
+//        }
     }
 
     // 修改权限请求处理
@@ -550,6 +554,51 @@ public class Camera2VisualProcessFrame extends Fragment
             }
         } else {
             super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        }
+    }
+
+    private String formatToString(int format) {
+        switch (format) {
+            case ImageFormat.YV12:
+                return "YV12";
+            case ImageFormat.YUV_420_888:
+                return "YUV_420_888";
+            case ImageFormat.NV21:
+                return "NV21";
+            case ImageFormat.NV16:
+                return "NV16";
+            case PixelFormat.RGB_565:
+                return "RGB_565";
+            case PixelFormat.RGBA_8888:
+                return "RGBA_8888";
+            case PixelFormat.RGBX_8888:
+                return "RGBX_8888";
+            case PixelFormat.RGB_888:
+                return "RGB_888";
+            case ImageFormat.JPEG:
+                return "JPEG";
+            case ImageFormat.YUY2:
+                return "YUY2";
+            case ImageFormat.Y8:
+                return "Y8";
+            case ImageFormat.RAW_SENSOR:
+                return "RAW_SENSOR";
+            case ImageFormat.RAW_PRIVATE:
+                return "RAW_PRIVATE";
+            case ImageFormat.RAW10:
+                return "RAW10";
+            case ImageFormat.DEPTH16:
+                return "DEPTH16";
+            case ImageFormat.DEPTH_POINT_CLOUD:
+                return "DEPTH_POINT_CLOUD";
+            case ImageFormat.DEPTH_JPEG:
+                return "DEPTH_JPEG";
+            case ImageFormat.PRIVATE:
+                return "PRIVATE";
+            case ImageFormat.HEIC:
+                return "HEIC";
+            default:
+                return "UNKNOWN";
         }
     }
     /**
@@ -578,13 +627,24 @@ public class Camera2VisualProcessFrame extends Fragment
                 if (map == null) {
                     continue;
                 }
+                // 输出所有支持的格式
+                int[] outputFormats = map.getOutputFormats();
+                Log.d(TAG, "Camera ID: " + cameraId + " supports formats:");
+                for (int format : outputFormats) {
+                    Log.d(TAG, "  Format: " + formatToString(format) + " (" + format + ")");
+                }
+
+//                if (!Arrays.asList(map.getOutputFormats()).contains(ImageFormat.NV21)) {
+//                    Log.e(TAG, "NV21 format not supported for camera: " + cameraId);
+//                    continue; // 尝试下一个相机
+//                }
 
                 // For still image captures, we use the largest available size.
                 Size largest = Collections.max(
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
                 mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.JPEG, /*maxImages*/2);
+                        ImageFormat.JPEG, /*maxImages*/8);
                 mImageReader.setOnImageAvailableListener(
                         mOnImageAvailableListener, mBackgroundHandler);
 
@@ -908,20 +968,19 @@ public class Camera2VisualProcessFrame extends Fragment
                                                @NonNull TotalCaptureResult result) {
                     showToast("Saved: " + mFile);
                     Log.d(TAG, mFile.toString());
-
-                    // 检查存储权限
-                    if (ContextCompat.checkSelfPermission(getActivity(),
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                            != PackageManager.PERMISSION_GRANTED) {
-
-                        requestPermissions(
-                                new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                                REQUEST_STORAGE_PERMISSION
-                        );
-                    } else {
-                        // 处理图像
+//                    // 检查存储权限
+//                    if (ContextCompat.checkSelfPermission(getActivity(),
+//                            Manifest.permission.WRITE_EXTERNAL_STORAGE)
+//                            != PackageManager.PERMISSION_GRANTED) {
+//
+//                        requestPermissions(
+//                                new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+//                                REQUEST_STORAGE_PERMISSION
+//                        );
+//                    } else {
+//                        // 处理图像
                         processCapturedImage();
-                    }
+//                    }
 
                     unlockFocus();
                 }
@@ -1018,25 +1077,28 @@ public class Camera2VisualProcessFrame extends Fragment
 
         @Override
         public void run() {
-            ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
-            byte[] bytes = new byte[buffer.remaining()];
-            buffer.get(bytes);
-            FileOutputStream output = null;
-            try {
-                output = new FileOutputStream(mFile);
-                output.write(bytes);
-            } catch (IOException e) {
-                e.printStackTrace();
-            } finally {
-                mImage.close();
-                if (null != output) {
-                    try {
-                        output.close();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
+//            ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+//            byte[] bytes = new byte[buffer.remaining()];
+//            buffer.get(bytes);
+            ArcSoftImageProcessor.processImage(mImage);
+//            ArcSoftImageProcessor.saveImageData(bytes, "/sdcard/DCIM/Camera/", "1.jpg");
+//            FileOutputStream output = null;
+//            try {
+//                output = new FileOutputStream(mFile);
+//                output.write(bytes);
+//                ArcSoftImageProcessor.processImage(mImage);
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//            } finally {
+//                mImage.close();
+//                if (null != output) {
+//                    try {
+//                        output.close();
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
+//                }
+//            }
         }
 
     }
