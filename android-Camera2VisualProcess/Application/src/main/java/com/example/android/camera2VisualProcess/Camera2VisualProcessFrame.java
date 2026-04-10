@@ -61,9 +61,6 @@ import android.view.ViewGroup;
 import android.widget.Toast;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -73,7 +70,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 // 在文件顶部添加导入
-
+import com.example.android.camera2VisualProcess.utils.CameraImageUtils;
 
 public class Camera2VisualProcessFrame extends Fragment
         implements View.OnClickListener, ActivityCompat.OnRequestPermissionsResultCallback {
@@ -265,6 +262,8 @@ public class Camera2VisualProcessFrame extends Fragment
      */
     private File mFile;
 
+    private final Object mImageLock = new Object();
+
     /**
      * This a callback object for the {@link ImageReader}. "onImageAvailable" will be called when a
      * still image is ready to be saved.
@@ -274,9 +273,13 @@ public class Camera2VisualProcessFrame extends Fragment
 
         @Override
         public void onImageAvailable(ImageReader reader) {
-            Image image = reader.acquireNextImage();
-            Log.d(TAG, "onImageAvailable: format" + image.getFormat());
-            mBackgroundHandler.post(new ImageSaver(image, mFile));
+            Image originalImage = reader.acquireNextImage();
+            Log.d(TAG, "onImageAvailable: format" + originalImage.getFormat());
+
+            synchronized (mImageLock) {
+                CameraImageUtils CameraImageUtils = copyImageUnitsData(originalImage);
+                mBackgroundHandler.post(new ImageSaver(CameraImageUtils, mFile));
+            }
         }
 
     };
@@ -979,7 +982,7 @@ public class Camera2VisualProcessFrame extends Fragment
 //                        );
 //                    } else {
 //                        // 处理图像
-                        processCapturedImage();
+//                        processCapturedImage();
 //                    }
 
                     unlockFocus();
@@ -1064,14 +1067,14 @@ public class Camera2VisualProcessFrame extends Fragment
         /**
          * The JPEG image
          */
-        private final Image mImage;
+        private final CameraImageUtils mImage;
         /**
          * The file we save the image into.
          */
         private final File mFile;
 
-        ImageSaver(Image image, File file) {
-            mImage = image;
+        ImageSaver(CameraImageUtils CameraImageUtils, File file) {
+            mImage = CameraImageUtils;
             mFile = file;
         }
 
@@ -1081,7 +1084,7 @@ public class Camera2VisualProcessFrame extends Fragment
 //            byte[] bytes = new byte[buffer.remaining()];
 //            buffer.get(bytes);
             ArcSoftImageProcessor.processImage(mImage);
-//            ArcSoftImageProcessor.saveImageData(bytes, "/sdcard/DCIM/Camera/", "1.jpg");
+//            ArcSoftImageProcessor.saveImageUnitsData(bytes, "/sdcard/DCIM/Camera/", "1.jpg");
 //            FileOutputStream output = null;
 //            try {
 //                output = new FileOutputStream(mFile);

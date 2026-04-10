@@ -11,12 +11,12 @@ import com.arcsoft.imageutil.ArcSoftImageUtil;
 import com.arcsoft.imageutil.ArcSoftImageUtilError;
 import com.arcsoft.imageutil.ArcSoftMirrorOrient;
 import com.arcsoft.imageutil.ArcSoftRotateDegree;
+import com.example.android.camera2VisualProcess.utils.CameraImageUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.security.Timestamp;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -43,19 +43,40 @@ public class ArcSoftImageProcessor {
         void onProcessingFailed(String error);
     }
 
-    public static void processImage(Image image) {
+    private static Bitmap imageToBitmap(Image image) {
+        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+    }
+
+    public static void processImage(CameraImageUtils image) {
         new Thread(() -> {
-            Image mImage = image;
             ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
-            Log.d(TAG, "processImage image format:" + image.getFormat());
-            saveImageData(bytes, outPutImageDir, "test.jpg");
-
-
+            String filename = (new Date()).getTime() + "_mirror" + image.getFormat() + ".jpg";
+            saveImageData(bytes, outPutImageDir, filename);
 //            for (ArcSoftImageFormat format : SUPPORTED_FORMATS) {
-//                doMirrorProcess(bytes, image.getWidth(), image.getHeight(), format, ArcSoftMirrorOrient.HORIZONTAL);
+//                // 创建图像数据缓冲区
+////                ArcSoftImageFormat format = ArcSoftImageFormat.I420;
+//                byte[] data = ArcSoftImageUtil.createImageData(
+//                        bitmap.getWidth(), bitmap.getHeight(), format);
+//
+//                // 转换Bitmap到指定格式
+//                int code = ArcSoftImageUtil.bitmapToImageData(bitmap, data, format);
+//                if (code != ArcSoftImageUtilError.CODE_SUCCESS) {
+//                    Log.w(TAG, format + " conversion failed: " + code);
+//                    continue;
+//                } else {
+//                    String filename = (new Date()).getTime() + "_mirror" + format.name().toLowerCase() + ".jpg";
+//                    saveImageData(bytes, outPutImageDir, filename);
+////                    doMirrorProcess(data, image.getWidth(), image.getHeight(), format, ArcSoftMirrorOrient.HORIZONTAL);
+//                }
+
 //            }
+//
+
 //            FileOutputStream output = null;
 //            File outPutImageFile = new File(outPutImageDir + "test.jpg");
 //            try {
@@ -270,7 +291,11 @@ public class ArcSoftImageProcessor {
                     width, height,
                     orient, format);
             if (code == ArcSoftImageUtilError.CODE_SUCCESS) {
-                saveImageData(mirrorData, outPutImageDir, (new Date()).getTime() + "_rotate." + format.name().toLowerCase());
+//                String filename = (new Date()).getTime() + "_mirror." + format.name().toLowerCase();
+                String filename = (new Date()).getTime() + "_mirror" + format.name().toLowerCase() + ".jpg";
+                Log.i(TAG, "doMirrorProcess success " + filename);
+                saveImageData(mirrorData, outPutImageDir, filename);
+//                saveImageData(mirrorData, outPutImageDir, (new Date()).getTime() + "_rotate." + format.name().toLowerCase());
                 Log.i(TAG, "Mirror operation success with code: " + code);
             } else {
                 Log.w(TAG, "Mirror operation failed with code: " + code);
