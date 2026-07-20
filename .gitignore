@@ -1,14 +1,16 @@
-# Gradle files
+# Gradle 构建输出
 .gradle/
 build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
 
-# Local configuration file (sdk path, etc)
+# 本地配置文件（SDK 路径等）
 local.properties
 
-# Log/OS Files
+# 日志文件
 *.log
 
-# Android Studio generated files and folders
+# Android Studio 生成的文件
 captures/
 .externalNativeBuild/
 .cxx/
@@ -16,110 +18,60 @@ captures/
 *.apk
 output-metadata.json
 
-# IntelliJ
+# IntelliJ IDEA 配置
 *.iml
 .idea/
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
+vcs.xml
+workspace.xml
+tasks.xml
+gradle.xml
+compiler.xml
+encodings.xml
+uiDesigner.xml
 
-# Keystore files
+# 密钥文件
 *.jks
 *.keystore
 
-# Google Services (e.g. APIs or Firebase)
+# 第三方服务配置（如 Firebase）
 google-services.json
 
-# Android Profiling
+# 性能分析文件
 *.hprof
 
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
+# C/C++ 编译产物（NDK）
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
+*.a
+*.lib
+*.d
 *.mod
 *.smod
-
-# Compiled Static libraries
-*.lai
+*.lo
 *.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# debug information files
-*.dwo
-
-# Prerequisites
-*.d
-
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
 *.gch
 *.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
+*.ilk
+*.pdb
 *.exe
 *.out
 *.app
-*.i*86
-*.x86_64
+*.elf
 *.hex
-
-# Debug files
-*.dSYM/
+*.dwo
 *.su
 *.idb
-*.pdb
-
-# Kernel Module Compile Results
+*.map
+*.exp
+*.i*86
+*.x86_64
+*.dSYM/
 *.mod*
 *.cmd
 .tmp_versions/
@@ -128,27 +80,24 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-# debug information files
-*.dwo
-
-.gradle
-**/build/
-!**/src/**/build/
-
-# Ignore Gradle GUI config
-gradle-app.setting
-
-# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-!gradle-wrapper.jar
-
-# Avoid ignore Gradle wrappper properties
-!gradle-wrapper.properties
-
-# Cache of project
-.gradletasknamecache
-
-# Eclipse Gradle plugin generated files
-# Eclipse Core
-.project
-# JDT-specific (Eclipse Java Development Tools)
+# 其他工具生成
+*.iml
 .classpath
+.project
+.settings/
+bin/
+gen/
+out/
+
+# 临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 测试报告
+test-output/
+junit/
+
+.mimocode
