@@ -42,10 +42,17 @@ apply plugin: 'com.android.application'
 // android.enableJetifier=true
 // 这样可以自动迁移到 AndroidX，避免后续兼容性问题。
 dependencies {
-    implementation "com.android.support:support-v4:27.0.2"
-    implementation "com.android.support:support-v13:27.0.2"
-    implementation "com.android.support:cardview-v7:27.0.2"
-    implementation "com.android.support:appcompat-v7:27.0.2"
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.legacy:legacy-support-v13:1.0.0'
+    implementation 'androidx.core:core:1.13.0'
+    implementation 'androidx.fragment:fragment:1.6.2'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    // Force consistent Kotlin stdlib versions
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+    configurations.all {
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+    }
 }
 
 // 自定义源码目录

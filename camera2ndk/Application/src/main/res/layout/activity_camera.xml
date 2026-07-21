@@ -20,4 +20,4 @@
     android:layout_height="match_parent"
     android:background="#000"
     android:exported="true"
-    tools:context="com.example.android.camera2raw.CameraActivity" />
+    tools:context="com.example.android.camera2raw.MainActivity" />

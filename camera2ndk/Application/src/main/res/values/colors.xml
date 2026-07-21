@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Google Camera 风格配色 -->
+    <color name="gc_background">#FF000000</color>
+    <color name="gc_surface">#1A1A1A</color>
+    <color name="gc_surface_translucent">#B3000000</color>
+    <color name="gc_primary">#FFFFFFFF</color>
+    <color name="gc_secondary">#B3FFFFFF</color>
+    <color name="gc_accent">#FF4285F4</color>
+    <color name="gc_shutter_outer">#FFFFFFFF</color>
+    <color name="gc_shutter_inner">#FFFFFFFF</color>
+    <color name="gc_shutter_recording">#FFFF4444</color>
+    <color name="gc_mode_selected">#FFFFFFFF</color>
+    <color name="gc_mode_unselected">#80FFFFFF</color>
+    <color name="gc_face_rect">#FF4CAF50</color>
+    <color name="gc_focus_ring">#FFFFC107</color>
+    <color name="gc_capture_flash">#80FFFFFF</color>
+    <color name="gc_bottom_bar">#E6000000</color>
+    <color name="gc_top_bar">#80000000</color>
+    <color name="gc_grid_line">#33FFFFFF</color>
+</resources>
