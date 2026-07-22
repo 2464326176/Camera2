@@ -265,6 +265,17 @@ public class CameraUtils {
         }
     }
 
+    /** Delete a gallery entry by URI. Does nothing if URI is null. */
+    public static void deleteGalleryEntry(Context context, Uri uri) {
+        if (uri == null) return;
+        try {
+            int deleted = context.getContentResolver().delete(uri, null, null);
+            Log.d(TAG, "Deleted gallery entry: " + uri + " rows=" + deleted);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to delete gallery entry: " + uri, e);
+        }
+    }
+
     public static void openLatestPhoto(Context context, Uri photoUri) {
         if (photoUri == null) {
             openGallery(context);

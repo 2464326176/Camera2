@@ -671,38 +671,49 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     /**
-     * Stage 2: Create thumbnail from the first capture frame (NV21 raw data).
+     * Stage 2: Save the first capture frame to gallery as a "raw" reference image.
+     * When the user clicks the thumbnail at this stage, the gallery opens showing
+     * this capture frame. Later, Stage 3 will replace it with the final processed image.
      * Uses Android YuvImage for fast JPEG encoding without going through the C++ pipeline.
      */
     private void updateThumbnailFromCaptureFrame(byte[] nv21Data, int width, int height) {
         try {
-            Log.d(TAG, "Creating thumbnail from first capture frame: " + width + "x" + height);
+            Log.d(TAG, "Stage 2: saving first capture frame to gallery: " + width + "x" + height);
             YuvImage yuv = new YuvImage(nv21Data, ImageFormat.NV21, width, height, null);
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 85, out);
+            yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 92, out);
             byte[] jpeg = out.toByteArray();
+
+            int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
+            Uri uri = CameraUtils.saveJpegToGallery(
+                    requireContext().getApplicationContext(), jpeg, "OPENCV_RAW", orientation);
+
             Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
             if (thumb != null) {
                 mainHandler.post(() -> {
                     thumbnailStage = THUMB_STAGE_CAPTURE;
+                    finalMediaUri = uri;
+                    lastMediaUri = uri;
                     updateThumbnail(thumb);
                     thumb.recycle();
+                    Log.d(TAG, "Stage 2: capture frame saved to gallery, uri=" + uri);
                 });
             }
         } catch (Exception e) {
-            Log.w(TAG, "Failed to create thumbnail from capture frame", e);
+            Log.w(TAG, "Failed to save capture frame thumbnail", e);
         }
     }
 
     private void processAndSave(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
         try {
-            Log.i(TAG, "Post-processing " + buffers.size() + " frames via HardwareBuffer");
+            Log.i(TAG, "Stage 3: post-processing " + buffers.size() + " frames via HardwareBuffer");
             byte[] jpeg = NativeEngine.getInstance().nativeProcessCapture(
                     mCapturePipeline,
                     buffers.toArray(new HardwareBuffer[0]),
                     metadataList.toArray(new FrameMetadata[0]),
                     95);
             if (jpeg == null) {
+                Log.e(TAG, "Stage 3: nativeProcessCapture returned null");
                 mainHandler.post(() -> {
                     isCapturing = false;
                     saveProgress.setVisibility(View.GONE);
@@ -713,6 +724,15 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             }
 
             int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
+
+            // Stage 3: Replace the Stage 2 capture-frame gallery entry with the final processed image.
+            // The intermediary raw frame is deleted; the final post-processed JPEG takes its place.
+            final Uri oldUri = finalMediaUri;
+            if (oldUri != null) {
+                Log.d(TAG, "Stage 3: deleting intermediate capture frame: " + oldUri);
+                CameraUtils.deleteGalleryEntry(requireContext().getApplicationContext(), oldUri);
+            }
+
             Uri uri = CameraUtils.saveJpegToGallery(
                     requireContext().getApplicationContext(), jpeg, "OPENCV", orientation);
 
@@ -742,14 +762,16 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                         updateThumbnail(finalThumb);
                         if (!finalThumb.isRecycled()) finalThumb.recycle();
                     }
+                    Log.i(TAG, "Stage 3: final processed image saved, uri=" + uri);
                     showSuccess(getString(R.string.photo_saved)
                             + " · " + frameCount + " frames");
                 } else {
+                    Log.e(TAG, "Stage 3: save failed");
                     showError("Save failed");
                 }
             });
         } catch (Exception e) {
-            Log.e(TAG, "processAndSave failed", e);
+            Log.e(TAG, "Stage 3: processAndSave failed", e);
             mainHandler.post(() -> {
                 isCapturing = false;
                 saveProgress.setVisibility(View.GONE);
@@ -971,12 +993,12 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void onThumbnailClick() {
-        // Stage 3 (processed): open the final post-processed image
-        if (thumbnailStage == THUMB_STAGE_PROCESSED && finalMediaUri != null) {
-            Log.d(TAG, "Opening final processed image: " + finalMediaUri);
+        if (finalMediaUri != null) {
+            // Stage 2 (capture frame) or Stage 3 (post-processed): open current session image
+            Log.d(TAG, "Opening current session image: " + finalMediaUri + " stage=" + thumbnailStage);
             CameraUtils.openLatestPhoto(requireContext(), finalMediaUri);
         } else if (lastMediaUri != null) {
-            // Stage 1/2 (preview/capture frame): open last saved image from previous session
+            // Stage 1 (preview frame): no current session image yet, open previous session
             Log.d(TAG, "Opening last saved image: " + lastMediaUri);
             CameraUtils.openLatestPhoto(requireContext(), lastMediaUri);
         } else {
