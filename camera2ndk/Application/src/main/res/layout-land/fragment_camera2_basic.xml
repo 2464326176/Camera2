@@ -25,12 +25,12 @@
         android:layout_alignParentStart="true"
         android:layout_alignParentTop="true">
 
-        <com.example.android.camera2raw.AutoFitTextureView
+        <com.opencv.camera.AutoFitTextureView
             android:id="@+id/texture"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
-        <com.example.android.camera2raw.FaceOverlayView
+        <com.opencv.camera.FaceOverlayView
             android:id="@+id/face_overlay"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />

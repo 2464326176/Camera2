@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 基础 Widget 样式（template 模块中 Widget.SampleMessage 的父样式） -->
+    <style name="Widget" />
+
     <!-- Base Theme: 全屏沉浸式暗色主题 -->
     <style name="AppTheme" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowFullscreen">true</item>

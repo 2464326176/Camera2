@@ -4425,7 +4425,7 @@ public class GridOverlayView extends View {
 将 fragment_camera.xml 中的 grid_overlay 替换为：
 
 <!-- 九宫格辅助线（默认隐藏） -->
-    <com.opencv.camera.GridOverlayView
+    <com.example.android.camera2raw.GridOverlayView
         android:id="@+id/grid_overlay"
         android:layout_width="0dp"
         android:layout_height="0dp"

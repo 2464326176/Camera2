@@ -13,21 +13,21 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package com.example.android.camera2raw.tests;
+package com.opencv.camera.tests;
 
-import com.example.android.camera2raw.*;
+import com.opencv.camera.*;
 
 import android.test.ActivityInstrumentationTestCase2;
 
 /**
 * Tests for Camera2Raw sample.
 */
-public class SampleTests extends ActivityInstrumentationTestCase2<CameraActivity> {
+public class SampleTests extends ActivityInstrumentationTestCase2<MainActivity> {
 
-    private CameraActivity mTestActivity;
+    private MainActivity mTestActivity;
 
     public SampleTests() {
-        super(CameraActivity.class);
+        super(MainActivity.class);
     }
 
     @Override

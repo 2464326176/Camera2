@@ -1,22 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenCV Camera</string>
-    <string name="mode_photo">拍照</string>
-    <string name="mode_video">录像</string>
-    <string name="mode_portrait">人像</string>
-    <string name="mode_night">夜景</string>
-    <string name="mode_panorama">全景</string>
-    <string name="flash_off">关闭</string>
-    <string name="flash_on">开启</string>
+    <string name="mode_photo">照片</string>
+    <string name="mode_video">视频</string>
+    <string name="flash_off">关</string>
+    <string name="flash_on">开</string>
     <string name="flash_auto">自动</string>
-    <string name="hdr_off">HDR 关</string>
-    <string name="hdr_on">HDR 开</string>
-    <string name="timer_off">关闭</string>
-    <string name="timer_3s">3秒</string>
-    <string name="timer_10s">10秒</string>
+    <string name="timer_off">关</string>
+    <string name="timer_3s">3s</string>
+    <string name="timer_10s">10s</string>
     <string name="permission_camera_rationale">需要相机权限才能使用拍照功能</string>
-    <string name="permission_storage_rationale">需要存储权限才能保存照片</string>
+    <string name="permission_mic_rationale">录像需要麦克风权限</string>
+    <string name="permission_storage_rationale">需要存储权限才能保存媒体</string>
+    <string name="permission_denied">权限被拒绝，部分功能不可用</string>
+    <string name="settings_title">设置</string>
+    <string name="open_settings">打开设置</string>
     <string name="camera_error">相机打开失败，请重试</string>
     <string name="photo_saved">照片已保存</string>
-    <string name="capture_processing">处理中…</string>
+    <string name="video_saved">视频已保存</string>
+    <string name="video_save_failed">视频保存失败</string>
+    <string name="capture_processing">OpenCV 处理中…</string>
+    <string name="capture_frames">多帧降噪 %1$d 帧…</string>
+    <string name="thumbnail_desc">缩略图</string>
+    <string name="picture">拍照</string>
+    <string name="recording">录制中</string>
+    <string name="description_info">描述信息</string>
 </resources>

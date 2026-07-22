@@ -47,6 +47,8 @@ dependencies {
     implementation 'androidx.core:core:1.13.0'
     implementation 'androidx.fragment:fragment:1.6.2'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'com.google.android.material:material:1.12.0'
     // Force consistent Kotlin stdlib versions
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
     configurations.all {
@@ -63,12 +65,13 @@ List<String> dirs = [
 ]
 
 android {
-    namespace 'com.example.android.camera2raw'
+    namespace 'com.opencv.camera'
     compileSdkVersion 34
 
     // 删除 buildToolsVersion 行，AGP 会使用默认版本（30.0.3+）
 
     defaultConfig {
+        applicationId 'com.opencv.camera'
         minSdkVersion 21
         targetSdkVersion 34
 
