@@ -16,9 +16,11 @@ import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.hardware.HardwareBuffer;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaRecorder;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
@@ -43,14 +45,17 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Camera2 封装：照片（ISO 自适应多帧 YUV）+ 视频录制。
+ * Camera2 wrapper: photo (ISO-adaptive multi-frame YUV) + video recording.
  */
 public class CameraController {
     private static final String TAG = "CameraController";
-    private static final int PREVIEW_TARGET_W = 1280;
-    private static final int PREVIEW_TARGET_H = 720;
+    private static final int PREVIEW_TARGET_W = 1920;
+    private static final int PREVIEW_TARGET_H = 1440;
     private static final int CAPTURE_MAX_PIXELS = 12_000_000; // ~12MP cap for NR performance
     private static final int MAX_BURST = 6;
+    private static final int BURST_TIMEOUT_MS = 8000;
+    private static final int CAMERA_LOCK_TIMEOUT_MS = 3000;
+    private static final int OPEN_LOCK_TIMEOUT_MS = 2500;
 
     private static final SparseIntArray DEFAULT_ORIENTATIONS = new SparseIntArray();
     static {
@@ -123,12 +128,18 @@ public class CameraController {
     private final Object burstLock = new Object();
     private final List<byte[]> burstFrames = new ArrayList<>();
     private int burstTarget = 1;
-    private int burstIso = 100;
+    private volatile int burstIso = 100;
     private int burstWidth;
     private int burstHeight;
     private final AtomicInteger burstReceived = new AtomicInteger(0);
     private boolean burstActive = false;
     private BurstCallback burstCallback;
+
+    // HardwareBuffer / FrameCallback
+    private FrameCallback frameCallback;
+    private final List<HardwareBuffer> burstHwBuffers = new ArrayList<>();
+    private final List<FrameMetadata> burstMetas = new ArrayList<>();
+    private volatile CaptureResult lastCaptureResult;
 
     // Video
     private MediaRecorder mediaRecorder;
@@ -153,6 +164,24 @@ public class CameraController {
         void onBurstFailed(String reason);
     }
 
+    /**
+     * Frame callback interface — passes HardwareBuffer + FrameMetadata to NativeEngine.
+     * The capture flow follows a 3-stage thumbnail pipeline:
+     *   1. Preview frame → instant thumbnail (on shutter click)
+     *   2. First capture frame → thumbnail update (when HAL delivers)
+     *   3. Final post-processed JPEG → thumbnail + gallery save (after algorithm processing)
+     */
+    public interface FrameCallback {
+        /** Preview frame ready */
+        default void onPreviewFrame(HardwareBuffer buffer, FrameMetadata metadata) {}
+
+        /** First capture frame arrived (NV21 data for instant thumbnail update) */
+        default void onFirstCaptureFrame(byte[] nv21Data, int width, int height, FrameMetadata metadata) {}
+
+        /** Burst capture complete — all frames ready for post-processing */
+        default void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {}
+    }
+
     public CameraController(@NonNull Context context,
                             @NonNull ImageReader.OnImageAvailableListener previewListener) {
         this.context = context.getApplicationContext();
@@ -161,6 +190,10 @@ public class CameraController {
 
     public void setCallback(CameraCallback callback) {
         this.callback = callback;
+    }
+
+    public void setFrameCallback(FrameCallback callback) {
+        this.frameCallback = callback;
     }
 
     public void startCamera() {
@@ -190,7 +223,7 @@ public class CameraController {
     }
 
     /**
-     * 设置拍照/录像模式。会话由 UI 通过 stopCamera + createPreviewSession 重建。
+     * Set capture mode (photo/video). Rebuild session via stopCamera + createPreviewSession.
      */
     public void setCaptureMode(int mode) {
         if (captureMode == mode) return;
@@ -210,8 +243,16 @@ public class CameraController {
         if (texture == null || previewSize == null) return;
         mPendingTexture = texture;
 
+        Log.d(TAG, "Creating preview session, mode=" + (captureMode == MODE_VIDEO ? "VIDEO" : "PHOTO")
+                + " preview=" + previewSize + " capture=" + captureSize);
         try {
             closeSessionOnly();
+
+            // Clean up old captureReader to avoid resource leak
+            if (captureReader != null) {
+                captureReader.close();
+                captureReader = null;
+            }
 
             texture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
             Surface previewSurface = new Surface(texture);
@@ -236,9 +277,6 @@ public class CameraController {
                 cameraDevice.createCaptureSession(outputs, sessionCallback, backgroundHandler);
             } else {
                 // Photo mode: preview + YUV analysis + YUV still capture
-                if (captureReader != null) {
-                    captureReader.close();
-                }
                 captureReader = ImageReader.newInstance(
                         captureSize.getWidth(), captureSize.getHeight(),
                         ImageFormat.YUV_420_888, MAX_BURST + 2);
@@ -258,7 +296,7 @@ public class CameraController {
             }
         } catch (Exception e) {
             Log.e(TAG, "createPreviewSession failed", e);
-            if (callback != null) callback.onCameraError("预览配置失败: " + e.getMessage());
+            if (callback != null) callback.onCameraError(context.getString(R.string.error_preview_config_failed) + ": " + e.getMessage());
         }
     }
 
@@ -270,6 +308,7 @@ public class CameraController {
                     captureSession = session;
                     isSessionReady = true;
                     currentState = STATE_PREVIEW;
+                    Log.i(TAG, "Session configured, starting preview");
                     try {
                         previewRequest = previewRequestBuilder.build();
                         session.setRepeatingRequest(previewRequest, captureCallback, backgroundHandler);
@@ -284,7 +323,7 @@ public class CameraController {
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession session) {
                     Log.e(TAG, "Capture session configure failed");
-                    if (callback != null) callback.onCameraError("预览配置失败");
+                    if (callback != null) callback.onCameraError("Preview configuration failed");
                 }
             };
 
@@ -301,24 +340,24 @@ public class CameraController {
     }
 
     /**
-     * 拍照：根据当前 ISO 决定帧数；AF 收敛 + AE precapture/lock 后 burst 采集 YUV。
+     * Capture: determine frame count by ISO; AF convergence + AE precapture/lock then burst YUV.
      */
     public void captureStillBurst(BurstCallback cb) {
         if (cameraDevice == null || !isSessionReady || captureMode != MODE_PHOTO) {
-            if (cb != null) cb.onBurstFailed("相机未就绪");
+            if (cb != null) cb.onBurstFailed("Camera not ready");
             return;
         }
         if (burstActive || currentState == STATE_WAITING_LOCK
                 || currentState == STATE_WAITING_PRECAPTURE
                 || currentState == STATE_WAITING_NON_PRECAPTURE
                 || currentState == STATE_CAPTURING) {
-            if (cb != null) cb.onBurstFailed("正在拍照");
+            if (cb != null) cb.onBurstFailed("Capture in progress");
             return;
         }
 
         this.burstCallback = cb;
         int iso = Math.max(50, currentIso);
-        int frames = ImageProcessor.frameCountForIso(iso);
+        int frames = this.frameCountForIso(iso);
         frames = Math.min(frames, MAX_BURST);
         pendingBurstFrames = frames;
 
@@ -343,6 +382,7 @@ public class CameraController {
                 failBurst("preview not ready");
                 return;
             }
+            Log.d(TAG, "Locking AF, state → WAITING_LOCK");
             currentState = STATE_WAITING_LOCK;
             previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
                     CaptureRequest.CONTROL_AF_MODE_AUTO);
@@ -377,6 +417,7 @@ public class CameraController {
         if (backgroundHandler != null) {
             backgroundHandler.removeCallbacks(afLockTimeoutRunnable);
         }
+        Log.d(TAG, "AF locked, proceeding to AE pre-capture");
         // Flash On/Auto needs precapture; Off can skip if AE already converged
         if (flashMode == FLASH_ON || flashMode == FLASH_AUTO) {
             runPrecaptureSequence();
@@ -395,6 +436,7 @@ public class CameraController {
                 fireBurstCapture(pendingBurstFrames);
                 return;
             }
+            Log.d(TAG, "Running AE pre-capture sequence, state → WAITING_PRECAPTURE");
             currentState = STATE_WAITING_PRECAPTURE;
             previewRequestBuilder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                     CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
@@ -433,6 +475,7 @@ public class CameraController {
             backgroundHandler.removeCallbacks(precaptureTimeoutRunnable);
             backgroundHandler.removeCallbacks(afLockTimeoutRunnable);
         }
+        Log.d(TAG, "Locking AE and firing burst capture, frames=" + pendingBurstFrames);
         try {
             if (previewRequestBuilder != null && captureSession != null) {
                 previewRequestBuilder.set(CaptureRequest.CONTROL_AE_LOCK, true);
@@ -447,12 +490,16 @@ public class CameraController {
 
     private void fireBurstCapture(int frameCount) {
         if (currentState == STATE_CAPTURING) return;
+        burstHwBuffers.clear();
+        burstMetas.clear();
+        lastCaptureResult = null;
         try {
             if (cameraDevice == null || captureReader == null) {
                 failBurst("capture reader null");
                 unlockFocus();
                 return;
             }
+            Log.i(TAG, "Firing burst capture: " + frameCount + " frames, state → CAPTURING");
             currentState = STATE_CAPTURING;
 
             List<CaptureRequest> requests = new ArrayList<>();
@@ -468,12 +515,15 @@ public class CameraController {
                 requests.add(builder.build());
             }
 
-            captureSession.stopRepeating();
+            // Do NOT call stopRepeating() before captureBurst() — on some devices
+            // (e.g. MediaTek) the async stop can race with captureBurst, causing the
+            // burst to be silently dropped and all frames lost.
             captureSession.captureBurst(requests, new CameraCaptureSession.CaptureCallback() {
                 @Override
                 public void onCaptureCompleted(@NonNull CameraCaptureSession session,
                                                @NonNull CaptureRequest request,
                                                @NonNull TotalCaptureResult result) {
+                    lastCaptureResult = result;
                     Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
                     if (iso != null) {
                         burstIso = iso;
@@ -498,7 +548,7 @@ public class CameraController {
             }, backgroundHandler);
 
             if (backgroundHandler != null) {
-                backgroundHandler.postDelayed(this::finishBurstIfNeeded, 8000);
+                backgroundHandler.postDelayed(this::finishBurstIfNeeded, BURST_TIMEOUT_MS);
             }
         } catch (CameraAccessException e) {
             Log.e(TAG, "fireBurstCapture: " + e.getMessage());
@@ -515,15 +565,29 @@ public class CameraController {
                 if (image != null) image.close();
                 return;
             }
-            byte[] nv21 = ImageProcessor.imageToNv21(image);
+            byte[] nv21 = imageToNv21(image);
             int w = image.getWidth();
             int h = image.getHeight();
+
+            // Extract HardwareBuffer before closing the image
+            HardwareBuffer hwBuf = null;
+            if (frameCallback != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                hwBuf = image.getHardwareBuffer();
+            }
+
             image.close();
             image = null;
 
             if (nv21 == null) {
                 Log.w(TAG, "Failed to convert capture frame to NV21");
                 return;
+            }
+
+            // Notify first-frame arrival for instant thumbnail update
+            int frameIndex = burstReceived.get();
+            if (frameIndex == 0 && frameCallback != null) {
+                Log.d(TAG, "First capture frame arrived: " + w + "x" + h);
+                frameCallback.onFirstCaptureFrame(nv21, w, h, extractMetadata(lastCaptureResult));
             }
 
             boolean complete = false;
@@ -534,6 +598,12 @@ public class CameraController {
                 burstWidth = w;
                 burstHeight = h;
                 burstFrames.add(nv21);
+
+                // New architecture: pass HardwareBuffer via FrameCallback
+                if (hwBuf != null) {
+                    burstHwBuffers.add(hwBuf);
+                    burstMetas.add(extractMetadata(lastCaptureResult));
+                }
                 int got = burstReceived.incrementAndGet();
                 if (got >= burstTarget) {
                     complete = true;
@@ -553,6 +623,13 @@ public class CameraController {
                 if (cb != null) {
                     cb.onBurstComplete(copy, w, h, iso);
                 }
+                if (frameCallback != null && !burstHwBuffers.isEmpty()) {
+                    frameCallback.onBurstComplete(new ArrayList<>(burstHwBuffers), new ArrayList<>(burstMetas));
+                }
+                // Ownership of HardwareBuffer objects transferred to callback;
+                // clear local references (caller will close them after processing).
+                burstHwBuffers.clear();
+                burstMetas.clear();
             }
         } catch (Exception e) {
             Log.e(TAG, "captureImageListener error", e);
@@ -569,9 +646,15 @@ public class CameraController {
             if (!burstActive) return;
             if (burstFrames.isEmpty()) {
                 burstActive = false;
+                // Close any HardwareBuffers that may have leaked
+                for (HardwareBuffer buf : burstHwBuffers) {
+                    try { buf.close(); } catch (Exception ignored) {}
+                }
+                burstHwBuffers.clear();
+                burstMetas.clear();
                 BurstCallback cb = burstCallback;
                 burstCallback = null;
-                if (cb != null) cb.onBurstFailed("未收到图像帧");
+                if (cb != null) cb.onBurstFailed("No image frames received");
                 return;
             }
             copy = new ArrayList<>(burstFrames);
@@ -614,6 +697,7 @@ public class CameraController {
                 backgroundHandler.removeCallbacks(precaptureTimeoutRunnable);
             }
             if (previewRequestBuilder == null || captureSession == null) return;
+            Log.d(TAG, "Unlocking focus, resuming preview");
             previewRequestBuilder.set(CaptureRequest.CONTROL_AE_LOCK, false);
             previewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
                     CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
@@ -641,7 +725,7 @@ public class CameraController {
     public void startRecording() {
         if (captureMode != MODE_VIDEO || !isSessionReady || isRecording) return;
         if (mediaRecorder == null) {
-            if (callback != null) callback.onCameraError("录像器未就绪");
+            if (callback != null) callback.onCameraError("Video recorder not ready");
             return;
         }
         try {
@@ -653,7 +737,7 @@ public class CameraController {
         } catch (Exception e) {
             Log.e(TAG, "startRecording failed", e);
             isRecording = false;
-            if (callback != null) callback.onCameraError("开始录像失败");
+            if (callback != null) callback.onCameraError("Failed to start recording");
         }
     }
 
@@ -895,6 +979,24 @@ public class CameraController {
     public int getSensorOrientation() { return sensorOrientation; }
     public int getCurrentIso() { return currentIso; }
 
+    /**
+     * Determine multi-frame denoise frame count by ISO.
+     * ISO &lt; 200 → 1 frame / 200–399 → 3 frames / 400–799 → 4 frames
+     * 800–1599 → 5 frames / ≥1600 → 6 frames
+     */
+    public int frameCountForIso(int iso) {
+        if (iso < 200) return 1;
+        if (iso < 400) return 3;
+        if (iso < 800) return 4;
+        if (iso < 1600) return 5;
+        return 6;
+    }
+
+    /** Get the last CaptureResult (for preview frame metadata extraction) */
+    public CaptureResult getLastCaptureResult() {
+        return lastCaptureResult;
+    }
+
     public int getJpegOrientation() {
         int deviceOrientation = getDeviceOrientationDegrees();
         if (cameraCharacteristics == null) return 90;
@@ -928,6 +1030,7 @@ public class CameraController {
     private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
+            Log.i(TAG, "Camera device opened: " + cameraId);
             cameraOpenCloseLock.release();
             cameraDevice = camera;
             if (mPendingTexture != null) {
@@ -937,10 +1040,11 @@ public class CameraController {
 
         @Override
         public void onDisconnected(@NonNull CameraDevice camera) {
+            Log.w(TAG, "Camera device disconnected");
             cameraOpenCloseLock.release();
             camera.close();
             cameraDevice = null;
-            if (callback != null) callback.onCameraError("相机断开连接");
+            if (callback != null) callback.onCameraError(context.getString(R.string.error_camera_disconnected));
         }
 
         @Override
@@ -950,11 +1054,11 @@ public class CameraController {
             cameraDevice = null;
             String errorMsg;
             switch (error) {
-                case ERROR_CAMERA_DEVICE: errorMsg = "相机设备错误"; break;
-                case ERROR_CAMERA_DISABLED: errorMsg = "相机被禁用"; break;
-                case ERROR_CAMERA_IN_USE: errorMsg = "相机被占用"; break;
-                case ERROR_CAMERA_SERVICE: errorMsg = "相机服务错误"; break;
-                default: errorMsg = "未知相机错误: " + error; break;
+                case ERROR_CAMERA_DEVICE: errorMsg = context.getString(R.string.error_camera_device); break;
+                case ERROR_CAMERA_DISABLED: errorMsg = context.getString(R.string.error_camera_disabled); break;
+                case ERROR_CAMERA_IN_USE: errorMsg = context.getString(R.string.error_camera_in_use); break;
+                case ERROR_CAMERA_SERVICE: errorMsg = context.getString(R.string.error_camera_service); break;
+                default: errorMsg = context.getString(R.string.error_camera_device) + ": " + error; break;
             }
             Log.e(TAG, "Camera error: " + errorMsg);
             if (callback != null) callback.onCameraError(errorMsg);
@@ -979,6 +1083,7 @@ public class CameraController {
                             if (afState == null
                                     || afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
                                     || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
+                                Log.d(TAG, "AF state converged: " + afState);
                                 afterAfLocked();
                             }
                             break;
@@ -988,6 +1093,7 @@ public class CameraController {
                             if (aeState == null
                                     || aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE
                                     || aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED) {
+                                Log.d(TAG, "AE pre-capture state: " + aeState + ", → WAITING_NON_PRECAPTURE");
                                 currentState = STATE_WAITING_NON_PRECAPTURE;
                             }
                             break;
@@ -996,6 +1102,7 @@ public class CameraController {
                             Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
                             if (aeState == null
                                     || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                                Log.d(TAG, "AE converged, locking and capturing");
                                 lockAeAndCapture();
                             }
                             break;
@@ -1036,13 +1143,14 @@ public class CameraController {
     private void openCamera() {
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
-            if (callback != null) callback.onCameraError("相机权限未授予");
+            if (callback != null) callback.onCameraError(context.getString(R.string.error_camera_permission));
             return;
         }
 
+        Log.i(TAG, "Opening camera, facing=" + (mCurrentFacing == CameraCharacteristics.LENS_FACING_BACK ? "BACK" : "FRONT"));
         CameraManager manager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
         try {
-            if (!cameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
+            if (!cameraOpenCloseLock.tryAcquire(OPEN_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 throw new RuntimeException("Timeout waiting to lock camera opening.");
             }
 
@@ -1093,7 +1201,7 @@ public class CameraController {
 
             if (cameraId == null) {
                 cameraOpenCloseLock.release();
-                if (callback != null) callback.onCameraError("未找到可用相机");
+                if (callback != null) callback.onCameraError(context.getString(R.string.error_camera_not_found));
                 return;
             }
 
@@ -1106,13 +1214,18 @@ public class CameraController {
         } catch (Exception e) {
             Log.e(TAG, "openCamera failed", e);
             try { cameraOpenCloseLock.release(); } catch (Exception ignored) {}
-            if (callback != null) callback.onCameraError("打开相机失败: " + e.getMessage());
+            if (callback != null) callback.onCameraError(context.getString(R.string.error_camera_open_failed) + ": " + e.getMessage());
         }
     }
 
     private void closeCamera() {
+        Log.i(TAG, "Closing camera");
         try {
-            cameraOpenCloseLock.acquire();
+            if (!cameraOpenCloseLock.tryAcquire(CAMERA_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Timeout acquiring camera lock, forcing close");
+                closeCameraInternal();
+                return;
+            }
             closeCameraInternal();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1157,6 +1270,7 @@ public class CameraController {
     }
 
     private void startBackgroundThreads() {
+        Log.d(TAG, "Starting background threads");
         if (backgroundThread == null) {
             backgroundThread = new HandlerThread("CameraBackground");
             backgroundThread.start();
@@ -1170,6 +1284,7 @@ public class CameraController {
     }
 
     private void stopBackgroundThreads() {
+        Log.d(TAG, "Stopping background threads");
         quitThread(backgroundThread);
         backgroundThread = null;
         backgroundHandler = null;
@@ -1193,28 +1308,29 @@ public class CameraController {
     // ---------- size selection ----------
 
     private static Size chooseCaptureSize(Size[] choices) {
-        List<Size> candidates = new ArrayList<>();
+        Size best = null;
+        Size best43 = null;
+        long bestArea = 0;
+        long best43Area = 0;
         for (Size s : choices) {
             long pixels = (long) s.getWidth() * s.getHeight();
             if (pixels <= CAPTURE_MAX_PIXELS && s.getWidth() >= 1280) {
-                candidates.add(s);
-            }
-        }
-        if (candidates.isEmpty()) {
-            return Collections.max(Arrays.asList(choices), new CompareSizesByArea());
-        }
-        // Prefer 4:3 closest to 8–12MP
-        Size best = null;
-        for (Size s : candidates) {
-            float ratio = (float) s.getWidth() / s.getHeight();
-            if (Math.abs(ratio - 4f / 3f) < 0.05f) {
-                if (best == null || s.getWidth() * s.getHeight() > best.getWidth() * best.getHeight()) {
+                float ratio = (float) s.getWidth() / s.getHeight();
+                if (Math.abs(ratio - 4f / 3f) < 0.05f) {
+                    if (pixels > best43Area) {
+                        best43 = s;
+                        best43Area = pixels;
+                    }
+                }
+                if (pixels > bestArea) {
                     best = s;
+                    bestArea = pixels;
                 }
             }
         }
+        if (best43 != null) return best43;
         if (best != null) return best;
-        return Collections.max(candidates, new CompareSizesByArea());
+        return Collections.max(Arrays.asList(choices), new CompareSizesByArea());
     }
 
     private static Size chooseOptimalPreviewSize(Size[] choices, int targetW, int targetH, Size aspectRatio) {
@@ -1266,6 +1382,113 @@ public class CameraController {
         if (best720 != null) return best720;
         return chooseOptimalPreviewSize(choices, 1280, 720,
                 new Size(16, 9));
+    }
+
+    /**
+     * Extract FrameMetadata from a CaptureResult.
+     */
+    public static FrameMetadata extractMetadata(CaptureResult result) {
+        FrameMetadata meta = new FrameMetadata();
+        if (result == null) return meta;
+        meta.timestampNs = result.get(CaptureResult.SENSOR_TIMESTAMP) != null
+                ? result.get(CaptureResult.SENSOR_TIMESTAMP) : 0;
+        meta.iso = result.get(CaptureResult.SENSOR_SENSITIVITY) != null
+                ? result.get(CaptureResult.SENSOR_SENSITIVITY) : 100;
+        meta.exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) != null
+                ? result.get(CaptureResult.SENSOR_EXPOSURE_TIME) : 0;
+        meta.flashState = result.get(CaptureResult.FLASH_STATE) != null
+                ? result.get(CaptureResult.FLASH_STATE) : 0;
+        meta.lensAperture = result.get(CaptureResult.LENS_APERTURE) != null
+                ? result.get(CaptureResult.LENS_APERTURE) : 0f;
+        meta.aeState = result.get(CaptureResult.CONTROL_AE_STATE) != null
+                ? result.get(CaptureResult.CONTROL_AE_STATE) : 0;
+        meta.afState = result.get(CaptureResult.CONTROL_AF_STATE) != null
+                ? result.get(CaptureResult.CONTROL_AF_STATE) : 0;
+        meta.awbState = result.get(CaptureResult.CONTROL_AWB_STATE) != null
+                ? result.get(CaptureResult.CONTROL_AWB_STATE) : 0;
+        return meta;
+    }
+
+    /**
+     * YUV_420_888 to NV21 (handles pixelStride / rowStride).
+     */
+    private static byte[] imageToNv21(Image image) {
+        if (image == null || image.getFormat() != ImageFormat.YUV_420_888) {
+            return null;
+        }
+
+        Image.Plane[] planes = image.getPlanes();
+        java.nio.ByteBuffer yBuffer = planes[0].getBuffer();
+        java.nio.ByteBuffer uBuffer = planes[1].getBuffer();
+        java.nio.ByteBuffer vBuffer = planes[2].getBuffer();
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int yRowStride = planes[0].getRowStride();
+        int yPixelStride = planes[0].getPixelStride();
+        int uRowStride = planes[1].getRowStride();
+        int vRowStride = planes[2].getRowStride();
+        int uPixelStride = planes[1].getPixelStride();
+        int vPixelStride = planes[2].getPixelStride();
+
+        byte[] nv21 = new byte[width * height * 3 / 2];
+        int pos = 0;
+
+        if (yPixelStride == 1 && yRowStride == width) {
+            yBuffer.get(nv21, 0, width * height);
+            pos = width * height;
+        } else if (yPixelStride == 1) {
+            for (int row = 0; row < height; row++) {
+                yBuffer.position(row * yRowStride);
+                yBuffer.get(nv21, pos, width);
+                pos += width;
+            }
+        } else {
+            byte[] rowBuf = new byte[yRowStride];
+            for (int row = 0; row < height; row++) {
+                yBuffer.position(row * yRowStride);
+                yBuffer.get(rowBuf, 0, Math.min(yRowStride, yBuffer.remaining()));
+                for (int col = 0; col < width; col++) {
+                    nv21[pos++] = rowBuf[col * yPixelStride];
+                }
+            }
+        }
+
+        if (vPixelStride == 2 && uPixelStride == 2
+                && vRowStride == uRowStride
+                && planes[1].getBuffer().capacity() > 0) {
+            int uvHeight = height / 2;
+            int uvWidth = width / 2;
+            byte[] rowBuf = new byte[vRowStride];
+            int outPos = width * height;
+            for (int row = 0; row < uvHeight; row++) {
+                vBuffer.position(row * vRowStride);
+                int toRead = Math.min(vRowStride, vBuffer.remaining());
+                vBuffer.get(rowBuf, 0, toRead);
+                for (int col = 0; col < uvWidth; col++) {
+                    int idx = col * vPixelStride;
+                    nv21[outPos++] = rowBuf[idx];
+                    if (idx + 1 < toRead) {
+                        nv21[outPos++] = rowBuf[idx + 1];
+                    } else {
+                        nv21[outPos++] = uBuffer.get(row * uRowStride + col * uPixelStride);
+                    }
+                }
+            }
+            return nv21;
+        }
+
+        int uvWidth = width / 2;
+        int uvHeight = height / 2;
+        for (int row = 0; row < uvHeight; row++) {
+            int uRowOffset = row * uRowStride;
+            int vRowOffset = row * vRowStride;
+            for (int col = 0; col < uvWidth; col++) {
+                nv21[pos++] = vBuffer.get(vRowOffset + col * vPixelStride);
+                nv21[pos++] = uBuffer.get(uRowOffset + col * uPixelStride);
+            }
+        }
+        return nv21;
     }
 
     private static int clamp(int v, int min, int max) {

@@ -10,15 +10,15 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 /**
- * 九宫格辅助线覆盖层。
- * 仿 Google Camera 风格：细白线，半透明。
- * 支持三分法和黄金比例两种模式。
+ * Rule-of-thirds grid overlay.
+ * Google Camera style: thin white lines, semi-transparent.
+ * Supports thirds and golden ratio modes.
  */
 public class GridOverlayView extends View {
 
-    public static final int GRID_THIRDS = 0;       // 三分法
-    public static final int GRID_GOLDEN = 1;        // 黄金比例
-    public static final int GRID_DIAGONAL = 2;      // 对角线
+    public static final int GRID_THIRDS = 0;       // Rule of thirds
+    public static final int GRID_GOLDEN = 1;        // Golden ratio
+    public static final int GRID_DIAGONAL = 2;      // Diagonal
 
     private final Paint gridPaint;
     private int gridMode = GRID_THIRDS;
@@ -37,7 +37,7 @@ public class GridOverlayView extends View {
         gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         gridPaint.setStyle(Paint.Style.STROKE);
         gridPaint.setStrokeWidth(1.0f);
-        gridPaint.setColor(Color.parseColor("#33FFFFFF")); // 半透明白色
+        gridPaint.setColor(Color.parseColor("#33FFFFFF")); // Semi-transparent white
     }
 
     public void setGridMode(int mode) {
@@ -50,7 +50,7 @@ public class GridOverlayView extends View {
     }
 
     /**
-     * 循环切换网格模式。
+     * Cycle through grid modes.
      */
     public int cycleGridMode() {
         gridMode = (gridMode + 1) % 3;
@@ -81,23 +81,23 @@ public class GridOverlayView extends View {
     }
 
     /**
-     * 三分法网格。
+     * Rule-of-thirds grid.
      */
     private void drawThirdsGrid(Canvas canvas, int w, int h) {
         float thirdW = w / 3f;
         float thirdH = h / 3f;
 
-        // 竖线
+        // Vertical lines
         canvas.drawLine(thirdW, 0, thirdW, h, gridPaint);
         canvas.drawLine(thirdW * 2, 0, thirdW * 2, h, gridPaint);
 
-        // 横线
+        // Horizontal lines
         canvas.drawLine(0, thirdH, w, thirdH, gridPaint);
         canvas.drawLine(0, thirdH * 2, w, thirdH * 2, gridPaint);
     }
 
     /**
-     * 黄金比例网格 (φ ≈ 1.618)。
+     * Golden ratio grid (phi ≈ 1.618).
      */
     private void drawGoldenGrid(Canvas canvas, int w, int h) {
         float phi = 1.618033988749895f;
@@ -106,9 +106,9 @@ public class GridOverlayView extends View {
         float y1 = h / phi;
         float y2 = h - y1;
 
-        // 稍微改变颜色以示区分
+        // Slightly different color for distinction
         Paint goldenPaint = new Paint(gridPaint);
-        goldenPaint.setColor(Color.parseColor("#44FFD700")); // 金色半透明
+        goldenPaint.setColor(Color.parseColor("#44FFD700")); // Gold semi-transparent
 
         canvas.drawLine(x1, 0, x1, h, goldenPaint);
         canvas.drawLine(x2, 0, x2, h, goldenPaint);
@@ -117,17 +117,17 @@ public class GridOverlayView extends View {
     }
 
     /**
-     * 对角线 + 中心十字。
+     * Diagonal grid + center crosshair.
      */
     private void drawDiagonalGrid(Canvas canvas, int w, int h) {
         Paint diagPaint = new Paint(gridPaint);
         diagPaint.setColor(Color.parseColor("#22FFFFFF"));
 
-        // 对角线
+        // Diagonals
         canvas.drawLine(0, 0, w, h, diagPaint);
         canvas.drawLine(w, 0, 0, h, diagPaint);
 
-        // 中心十字（更细更淡）
+        // Center crosshair (thinner and lighter)
         Paint centerPaint = new Paint(gridPaint);
         centerPaint.setStrokeWidth(0.5f);
         centerPaint.setColor(Color.parseColor("#44FFFFFF"));

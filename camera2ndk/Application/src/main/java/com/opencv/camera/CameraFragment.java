@@ -6,9 +6,15 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
 import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.graphics.YuvImage;
+import android.graphics.drawable.BitmapDrawable;
+import android.hardware.HardwareBuffer;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaActionSound;
@@ -57,9 +63,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 照片 / 视频双模式相机 UI。
- * 预览：OpenCV YuNet 人脸框
- * 拍照：按 ISO 单帧 / 3–6 帧 OpenCV 降噪
+ * Photo / video dual-mode camera UI.
+ * Preview: OpenCV YuNet face detection
+ * Capture: ISO-adaptive single / 3–6 frame OpenCV denoising
  */
 public class CameraFragment extends Fragment implements CameraController.CameraCallback {
 
@@ -112,8 +118,24 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     private boolean faceDetectEnabled = true;
     private boolean shutterSoundEnabled = true;
     private Uri lastMediaUri = null;
-    private int uiMode = ImageProcessor.MODE_PHOTO;
+    private int uiMode = CameraController.MODE_PHOTO;
     private int flashMode = CameraController.FLASH_OFF;
+
+    // 3-stage thumbnail pipeline:
+    //   Stage 1: preview frame → instant thumbnail (on shutter click)
+    //   Stage 2: first capture frame → thumbnail update (when HAL delivers)
+    //   Stage 3: final post-processed JPEG → thumbnail + gallery save (after algorithm)
+    private static final int THUMB_STAGE_NONE = 0;
+    private static final int THUMB_STAGE_PREVIEW = 1;
+    private static final int THUMB_STAGE_CAPTURE = 2;
+    private static final int THUMB_STAGE_PROCESSED = 3;
+    private int thumbnailStage = THUMB_STAGE_NONE;
+    private Uri finalMediaUri = null; // URI of final processed image in current capture session
+
+    // NativeEngine handles
+    private long mEngineHandle = 0;
+    private long mPreviewPipeline = 0;
+    private long mCapturePipeline = 0;
 
     private int topBarPadL, topBarPadT, topBarPadR, topBarPadB;
     private int bottomBarPadL, bottomBarPadT, bottomBarPadR, bottomBarPadB;
@@ -149,13 +171,14 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+        Log.d(TAG, "onViewCreated");
         shutterSound = new MediaActionSound();
         shutterSound.load(MediaActionSound.SHUTTER_CLICK);
         initViews(view);
         applyWindowInsets(view);
         applyPreferences();
         initCamera();
-        initImageProcessor();
+        initNativeEngine();
         setupGestureDetectors();
         setupModeSelector();
         updateModeUi();
@@ -287,10 +310,16 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         });
     }
 
-    private void initImageProcessor() {
+    private void initNativeEngine() {
         processExecutor.execute(() -> {
-            boolean ok = ImageProcessor.initFaceDetector(requireContext().getApplicationContext());
-            Log.i(TAG, "OpenCV face detector init: " + ok);
+            String modelDir = requireContext().getApplicationContext().getFilesDir().getAbsolutePath();
+            mEngineHandle = NativeEngine.getInstance().nativeCreateEngine(modelDir);
+            mPreviewPipeline = NativeEngine.getInstance().nativeCreatePreviewPipeline(
+                    mEngineHandle, 1280, 720, NativeEngine.FORMAT_NV21, 10);
+            mCapturePipeline = NativeEngine.getInstance().nativeCreateCapturePipeline(
+                    mEngineHandle, 1280, 720, NativeEngine.FORMAT_NV21);
+            Log.i(TAG, "Native engine initialized: engine=" + mEngineHandle
+                    + " preview=" + mPreviewPipeline + " capture=" + mCapturePipeline);
         });
     }
 
@@ -304,6 +333,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             }
         }
         if (!missing.isEmpty()) {
+            Log.d(TAG, "Requesting permissions: " + missing);
             requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
             return;
         }
@@ -311,7 +341,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private String[] requiredPermissions() {
-        if (uiMode == ImageProcessor.MODE_VIDEO) {
+        if (uiMode == CameraController.MODE_VIDEO) {
             return new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
         }
         return new String[]{Manifest.permission.CAMERA};
@@ -319,7 +349,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     private void startCameraSession() {
         if (cameraController == null || textureView == null) return;
-        cameraController.setCaptureMode(uiMode == ImageProcessor.MODE_VIDEO
+        Log.d(TAG, "startCameraSession mode=" + uiMode);
+        cameraController.setCaptureMode(uiMode == CameraController.MODE_VIDEO
                 ? CameraController.MODE_VIDEO
                 : CameraController.MODE_PHOTO);
         cameraController.setFlashMode(flashMode);
@@ -334,6 +365,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     @Override
     public void onCameraOpened(Size previewSize) {
+        Log.i(TAG, "Camera opened, preview=" + previewSize);
         mainHandler.post(() -> {
             if (!isAdded() || previewSize == null) return;
             // Portrait display: swap for aspect if sensor is landscape
@@ -365,7 +397,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             Log.e(TAG, "Camera error: " + message);
             if (isAdded()) {
                 Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG)
-                        .setAction("重试", v -> openCameraWithPermission())
+                        .setAction("Retry", v -> openCameraWithPermission())
                         .show();
             }
         });
@@ -389,8 +421,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     public void onIsoUpdated(int iso) {
         mainHandler.post(() -> {
             if (isoLabel == null) return;
-            if (uiMode == ImageProcessor.MODE_PHOTO) {
-                int frames = ImageProcessor.frameCountForIso(iso);
+            if (uiMode == CameraController.MODE_PHOTO) {
+                int frames = cameraController.frameCountForIso(iso);
                 isoLabel.setText(String.format(Locale.US, "ISO %d · %df", iso, frames));
             } else {
                 isoLabel.setText(String.format(Locale.US, "ISO %d", iso));
@@ -454,8 +486,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             image = reader.acquireLatestImage();
             if (image == null) return;
 
-            // Photo mode + setting gate only; always close image on early exit
-            if (uiMode != ImageProcessor.MODE_PHOTO || !faceDetectEnabled) {
+            if (uiMode != CameraController.MODE_PHOTO || !faceDetectEnabled) {
                 return;
             }
 
@@ -468,30 +499,41 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             }
             lastFaceDetectTime = now;
 
-            final byte[] nv21 = ImageProcessor.imageToNv21(image);
+            // New architecture: zero-copy transfer via HardwareBuffer
+            HardwareBuffer hwBuf = null;
+            FrameMetadata meta = null;
+            if (NativeEngine.supportsHardwareBuffer()) {
+                hwBuf = image.getHardwareBuffer();
+                meta = cameraController.extractMetadata(cameraController.getLastCaptureResult());
+            }
+
             final int imgW = image.getWidth();
             final int imgH = image.getHeight();
             image.close();
             image = null;
 
-            if (nv21 == null) {
+            if (hwBuf == null) {
                 faceBusy.set(false);
                 return;
             }
 
+            final HardwareBuffer finalBuf = hwBuf;
+            final FrameMetadata finalMeta = meta;
             processExecutor.execute(() -> {
                 try {
-                    RectF[] faces = ImageProcessor.detectFacesNv21(nv21, imgW, imgH);
+                    float[] faceData = NativeEngine.getInstance().nativeProcessPreviewFrame(
+                            mPreviewPipeline, finalBuf, finalMeta);
                     mainHandler.post(() -> {
                         if (!isAdded() || faceOverlay == null) return;
-                        if (!faceDetectEnabled || uiMode != ImageProcessor.MODE_PHOTO) {
+                        if (!faceDetectEnabled || uiMode != CameraController.MODE_PHOTO) {
                             faceOverlay.clearFaces();
                             return;
                         }
                         faceOverlay.setPreviewSize(imgW, imgH);
-                        faceOverlay.setFaces(faces);
+                        faceOverlay.setFaces(parseFaceResults(faceData));
                     });
                 } finally {
+                    finalBuf.close();
                     faceBusy.set(false);
                 }
             });
@@ -511,7 +553,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     // ---------- Shutter / Capture ----------
 
     private void onShutterClick() {
-        if (uiMode == ImageProcessor.MODE_VIDEO) {
+        Log.d(TAG, "Shutter clicked, mode=" + (uiMode == CameraController.MODE_VIDEO ? "VIDEO" : "PHOTO"));
+        if (uiMode == CameraController.MODE_VIDEO) {
             toggleVideoRecording();
             return;
         }
@@ -531,6 +574,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         if (cameraController == null) return;
         btnShutter.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
         if (cameraController.isRecording()) {
+            Log.i(TAG, "Stopping video recording");
             cameraController.stopRecording();
         } else {
             // Ensure mic permission
@@ -539,6 +583,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_PERMISSIONS);
                 return;
             }
+            Log.i(TAG, "Starting video recording");
             cameraController.startRecording();
         }
     }
@@ -556,51 +601,201 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         }
 
         int iso = cameraController.getCurrentIso();
-        int frames = ImageProcessor.frameCountForIso(iso);
+        int frames = cameraController.frameCountForIso(iso);
+        Log.i(TAG, "Capture started: iso=" + iso + " frames=" + frames);
+
+        // Stage 1: Capture preview frame as instant thumbnail
+        capturePreviewAsThumbnail();
+
         processingText.setText(frames <= 1
                 ? getString(R.string.capture_processing)
                 : getString(R.string.capture_frames, frames));
         processingIndicator.setVisibility(View.VISIBLE);
 
+        cameraController.setFrameCallback(new CameraController.FrameCallback() {
+            @Override
+            public void onFirstCaptureFrame(byte[] nv21Data, int width, int height, FrameMetadata metadata) {
+                // Stage 2: First capture frame arrived — update thumbnail
+                Log.d(TAG, "First capture frame: " + width + "x" + height + " iso=" + metadata.iso);
+                processExecutor.execute(() -> updateThumbnailFromCaptureFrame(nv21Data, width, height));
+            }
+
+            @Override
+            public void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
+                // Stage 3: All frames ready — run algorithm post-processing
+                Log.i(TAG, "Burst complete: " + buffers.size() + " frames, starting post-processing");
+                processExecutor.execute(() -> processAndSave(buffers, metadataList));
+            }
+        });
+
         cameraController.captureStillBurst(new CameraController.BurstCallback() {
             @Override
             public void onBurstComplete(List<byte[]> nv21Frames, int width, int height, int captureIso) {
-                processExecutor.execute(() -> processAndSave(nv21Frames, width, height, captureIso));
+                // Legacy fallback: only used when HardwareBuffer is unavailable
+                if (!NativeEngine.supportsHardwareBuffer()) {
+                    Log.d(TAG, "Falling back to legacy NV21 path");
+                    processExecutor.execute(() -> processAndSaveLegacy(nv21Frames, width, height, captureIso));
+                }
             }
 
             @Override
             public void onBurstFailed(String reason) {
+                Log.e(TAG, "Burst failed: " + reason);
                 mainHandler.post(() -> {
                     isCapturing = false;
                     saveProgress.setVisibility(View.GONE);
                     processingIndicator.setVisibility(View.GONE);
-                    showError("拍照失败: " + reason);
+                    thumbnailStage = THUMB_STAGE_NONE;
+                    finalMediaUri = null;
+                    showError(getString(R.string.error_capture_failed) + ": " + reason);
                 });
             }
         });
     }
 
-    private void processAndSave(List<byte[]> frames, int width, int height, int iso) {
+    private void capturePreviewAsThumbnail() {
+        // Stage 1: Instant thumbnail from current preview frame
+        if (textureView == null) return;
         try {
-            Log.i(TAG, "Processing " + frames.size() + " frames @ " + width + "x" + height
-                    + " iso=" + iso);
-            byte[] jpeg = ImageProcessor.denoiseAndEncodeJpeg(frames, width, height, iso, 95);
+            Bitmap previewBmp = textureView.getBitmap();
+            if (previewBmp != null) {
+                thumbnailStage = THUMB_STAGE_PREVIEW;
+                finalMediaUri = null; // Clear previous session's final URI
+                updateThumbnail(previewBmp);
+                previewBmp.recycle();
+                Log.d(TAG, "Preview frame captured as instant thumbnail");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to capture preview thumbnail", e);
+        }
+    }
+
+    /**
+     * Stage 2: Create thumbnail from the first capture frame (NV21 raw data).
+     * Uses Android YuvImage for fast JPEG encoding without going through the C++ pipeline.
+     */
+    private void updateThumbnailFromCaptureFrame(byte[] nv21Data, int width, int height) {
+        try {
+            Log.d(TAG, "Creating thumbnail from first capture frame: " + width + "x" + height);
+            YuvImage yuv = new YuvImage(nv21Data, ImageFormat.NV21, width, height, null);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 85, out);
+            byte[] jpeg = out.toByteArray();
+            Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+            if (thumb != null) {
+                mainHandler.post(() -> {
+                    thumbnailStage = THUMB_STAGE_CAPTURE;
+                    updateThumbnail(thumb);
+                    thumb.recycle();
+                });
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to create thumbnail from capture frame", e);
+        }
+    }
+
+    private void processAndSave(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
+        try {
+            Log.i(TAG, "Post-processing " + buffers.size() + " frames via HardwareBuffer");
+            byte[] jpeg = NativeEngine.getInstance().nativeProcessCapture(
+                    mCapturePipeline,
+                    buffers.toArray(new HardwareBuffer[0]),
+                    metadataList.toArray(new FrameMetadata[0]),
+                    95);
             if (jpeg == null) {
                 mainHandler.post(() -> {
                     isCapturing = false;
                     saveProgress.setVisibility(View.GONE);
                     processingIndicator.setVisibility(View.GONE);
-                    showError("图像处理失败");
+                    showError("Image processing failed");
                 });
                 return;
             }
 
             int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
-            // For front camera mirrored preview, photo usually not mirrored in file
             Uri uri = CameraUtils.saveJpegToGallery(
                     requireContext().getApplicationContext(), jpeg, "OPENCV", orientation);
 
-            Bitmap thumb = ImageProcessor.jpegToBitmap(jpeg);
+            Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+            if (thumb != null && orientation != 0) {
+                Matrix m = new Matrix();
+                m.postRotate(orientation);
+                Bitmap rotated = Bitmap.createBitmap(thumb, 0, 0,
+                        thumb.getWidth(), thumb.getHeight(), m, true);
+                if (rotated != thumb) {
+                    thumb.recycle();
+                    thumb = rotated;
+                }
+            }
+
+            Bitmap finalThumb = thumb;
+            int frameCount = buffers.size();
+            mainHandler.post(() -> {
+                isCapturing = false;
+                saveProgress.setVisibility(View.GONE);
+                processingIndicator.setVisibility(View.GONE);
+                if (uri != null) {
+                    lastMediaUri = uri;
+                    finalMediaUri = uri;
+                    thumbnailStage = THUMB_STAGE_PROCESSED;
+                    if (finalThumb != null) {
+                        updateThumbnail(finalThumb);
+                        if (!finalThumb.isRecycled()) finalThumb.recycle();
+                    }
+                    showSuccess(getString(R.string.photo_saved)
+                            + " · " + frameCount + " frames");
+                } else {
+                    showError("Save failed");
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "processAndSave failed", e);
+            mainHandler.post(() -> {
+                isCapturing = false;
+                saveProgress.setVisibility(View.GONE);
+                processingIndicator.setVisibility(View.GONE);
+                showError(getString(R.string.error_process_exception) + ": " + e.getMessage());
+            });
+        } finally {
+            // Close all HardwareBuffers to prevent resource leaks
+            for (HardwareBuffer buf : buffers) {
+                try { buf.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /**
+     * Legacy fallback: process via NV21 byte[] when HardwareBuffer is unavailable.
+     */
+    private void processAndSaveLegacy(List<byte[]> frames, int width, int height, int iso) {
+        try {
+            Log.i(TAG, "Post-processing " + frames.size() + " frames (legacy) @ " + width + "x" + height
+                    + " iso=" + iso);
+            // Use NativeEngine's fallback path (via DirectByteBuffer)
+            // Since NativeEngine doesn't expose a direct NV21 byte[] interface,
+            // fall back to Android YuvImage encoding here
+            byte[] jpeg = null;
+            if (!frames.isEmpty()) {
+                YuvImage yuv = new YuvImage(frames.get(0), ImageFormat.NV21, width, height, null);
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 95, out);
+                jpeg = out.toByteArray();
+            }
+            if (jpeg == null) {
+                mainHandler.post(() -> {
+                    isCapturing = false;
+                    saveProgress.setVisibility(View.GONE);
+                    processingIndicator.setVisibility(View.GONE);
+                    showError("Image processing failed");
+                });
+                return;
+            }
+
+            int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
+            Uri uri = CameraUtils.saveJpegToGallery(
+                    requireContext().getApplicationContext(), jpeg, "OPENCV", orientation);
+
+            Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
             if (thumb != null && orientation != 0) {
                 Matrix m = new Matrix();
                 m.postRotate(orientation);
@@ -619,24 +814,42 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 processingIndicator.setVisibility(View.GONE);
                 if (uri != null) {
                     lastMediaUri = uri;
+                    finalMediaUri = uri;
+                    thumbnailStage = THUMB_STAGE_PROCESSED;
                     if (finalThumb != null) {
                         updateThumbnail(finalThumb);
+                        if (!finalThumb.isRecycled()) finalThumb.recycle();
                     }
                     showSuccess(getString(R.string.photo_saved)
-                            + " · " + frames.size() + "帧 ISO" + iso);
+                            + " · " + frames.size() + " frames ISO" + iso);
                 } else {
-                    showError("保存失败");
+                    showError("Save failed");
                 }
             });
         } catch (Exception e) {
-            Log.e(TAG, "processAndSave failed", e);
+            Log.e(TAG, "processAndSaveLegacy failed", e);
             mainHandler.post(() -> {
                 isCapturing = false;
                 saveProgress.setVisibility(View.GONE);
                 processingIndicator.setVisibility(View.GONE);
-                showError("处理异常: " + e.getMessage());
+                showError(getString(R.string.error_process_exception) + ": " + e.getMessage());
             });
         }
+    }
+
+    private RectF[] parseFaceResults(float[] faceData) {
+        if (faceData == null || faceData.length < 15) return new RectF[0];
+        int count = faceData.length / 15;
+        RectF[] faces = new RectF[count];
+        for (int i = 0; i < count; i++) {
+            int offset = i * 15;
+            float x = faceData[offset];
+            float y = faceData[offset + 1];
+            float w = faceData[offset + 2];
+            float h = faceData[offset + 3];
+            faces[i] = new RectF(x, y, x + w, y + h);
+        }
+        return faces;
     }
 
     private void startCountdown(int seconds) {
@@ -665,6 +878,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     private void onSwitchCamera() {
         if (cameraController == null || cameraController.isRecording() || isCapturing) return;
+        Log.i(TAG, "Switching camera");
         btnSwitchCamera.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
         btnSwitchCamera.animate()
                 .rotationBy(180)
@@ -757,9 +971,16 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void onThumbnailClick() {
-        if (lastMediaUri != null) {
+        // Stage 3 (processed): open the final post-processed image
+        if (thumbnailStage == THUMB_STAGE_PROCESSED && finalMediaUri != null) {
+            Log.d(TAG, "Opening final processed image: " + finalMediaUri);
+            CameraUtils.openLatestPhoto(requireContext(), finalMediaUri);
+        } else if (lastMediaUri != null) {
+            // Stage 1/2 (preview/capture frame): open last saved image from previous session
+            Log.d(TAG, "Opening last saved image: " + lastMediaUri);
             CameraUtils.openLatestPhoto(requireContext(), lastMediaUri);
         } else {
+            Log.d(TAG, "Opening gallery");
             CameraUtils.openGallery(requireContext());
         }
     }
@@ -771,8 +992,16 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         int y = (bitmap.getHeight() - size) / 2;
         Bitmap cropped = Bitmap.createBitmap(bitmap, x, y, size, size);
         Bitmap thumbBitmap = Bitmap.createScaledBitmap(cropped, 128, 128, true);
-        thumbnail.setImageBitmap(thumbBitmap);
         if (cropped != bitmap) cropped.recycle();
+
+        // Recycle old bitmap to avoid memory accumulation after multiple shots
+        if (thumbnail.getDrawable() instanceof BitmapDrawable) {
+            Bitmap oldBitmap = ((BitmapDrawable) thumbnail.getDrawable()).getBitmap();
+            if (oldBitmap != null && oldBitmap != thumbBitmap && !oldBitmap.isRecycled()) {
+                oldBitmap.recycle();
+            }
+        }
+        thumbnail.setImageBitmap(thumbBitmap);
 
         thumbnail.animate()
                 .scaleX(0.85f).scaleY(0.85f)
@@ -839,8 +1068,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void setupModeSelector() {
-        modePhoto.setOnClickListener(v -> selectMode(ImageProcessor.MODE_PHOTO));
-        modeVideo.setOnClickListener(v -> selectMode(ImageProcessor.MODE_VIDEO));
+        modePhoto.setOnClickListener(v -> selectMode(CameraController.MODE_PHOTO));
+        modeVideo.setOnClickListener(v -> selectMode(CameraController.MODE_VIDEO));
     }
 
     private void selectMode(int mode) {
@@ -848,11 +1077,11 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         if (cameraController != null && cameraController.isRecording()) return;
         if (isCapturing) return;
 
+        Log.i(TAG, "Mode switch: " + (mode == CameraController.MODE_PHOTO ? "PHOTO" : "VIDEO"));
         uiMode = mode;
-        ImageProcessor.setProcessMode(mode);
         updateModeUi();
 
-        if (mode == ImageProcessor.MODE_VIDEO) {
+        if (mode == CameraController.MODE_VIDEO) {
             faceOverlay.clearFaces();
             // Request mic early when entering video mode
             if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO)
@@ -870,7 +1099,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     private void updateModeUi() {
         if (modePhoto == null) return;
-        if (uiMode == ImageProcessor.MODE_PHOTO) {
+        if (uiMode == CameraController.MODE_PHOTO) {
             modePhoto.setTextAppearance(R.style.ModeSelectorText_Selected);
             modeVideo.setTextAppearance(R.style.ModeSelectorText);
             btnShutter.setBackgroundResource(R.drawable.selector_shutter);
@@ -942,6 +1171,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 || cameraController.getPreviewSize() == null) return;
         if (viewWidth == 0 || viewHeight == 0) return;
 
+        Log.d(TAG, "configureTransform: view=" + viewWidth + "x" + viewHeight + " preview=" + cameraController.getPreviewSize());
         int rotation = requireActivity().getWindowManager().getDefaultDisplay().getRotation();
         Size previewSize = cameraController.getPreviewSize();
         Matrix matrix = CameraUtils.configureTransform(
@@ -972,6 +1202,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     @Override
     public void onResume() {
         super.onResume();
+        Log.d(TAG, "onResume");
         applyPreferences();
         if (textureView != null && textureView.isAvailable()) {
             openCameraWithPermission();
@@ -980,6 +1211,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     @Override
     public void onPause() {
+        Log.d(TAG, "onPause");
         if (cameraController != null) {
             if (cameraController.isRecording()) {
                 cameraController.stopRecording();
@@ -992,7 +1224,16 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     @Override
     public void onDestroyView() {
-        ImageProcessor.releaseFaceDetector();
+        Log.d(TAG, "onDestroyView, releasing native resources");
+        if (mPreviewPipeline != 0 && mEngineHandle != 0) {
+            NativeEngine.getInstance().nativeDestroyPipeline(mEngineHandle, mPreviewPipeline);
+        }
+        if (mCapturePipeline != 0 && mEngineHandle != 0) {
+            NativeEngine.getInstance().nativeDestroyPipeline(mEngineHandle, mCapturePipeline);
+        }
+        if (mEngineHandle != 0) {
+            NativeEngine.getInstance().nativeDestroyEngine(mEngineHandle);
+        }
         if (shutterSound != null) {
             shutterSound.release();
             shutterSound = null;
@@ -1036,7 +1277,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             return;
         }
 
-        if (uiMode == ImageProcessor.MODE_VIDEO && !audioOk) {
+        if (uiMode == CameraController.MODE_VIDEO && !audioOk) {
             showError(getString(R.string.permission_mic_rationale));
             // Stay in video UI but cannot record until granted; still open camera preview
         }

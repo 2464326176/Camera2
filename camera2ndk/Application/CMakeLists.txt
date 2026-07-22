@@ -1,41 +1,85 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("opencv_ndk_demo")
+project("camera_engine")
 
-# OPENCV_SDK_PATH from build.gradle (local.properties opencv.dir)
-if (NOT OPENCV_SDK_PATH)
-    set(OPENCV_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../")
+# C++17 for HardwareBuffer API
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Allow weak symbols for API 26+ features (AHardwareBuffer) on devices running API 21+
+add_definitions(-D__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
+
+# OpenCV SDK path (use cmake variable if set from build.gradle, otherwise use relative path)
+if(NOT DEFINED OPENCV_SDK_PATH)
+    set(OPENCV_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/native)
 endif()
-
-message(STATUS "OpenCV SDK Path: ${OPENCV_SDK_PATH}")
-
-set(OPENCV_INCLUDE_DIR ${OPENCV_SDK_PATH}/sdk/native/jni/include)
-if (NOT EXISTS "${OPENCV_INCLUDE_DIR}/opencv2/core.hpp")
-    message(FATAL_ERROR "OpenCV headers not found at ${OPENCV_INCLUDE_DIR}. Set opencv.dir in local.properties.")
+# When OPENCV_SDK_PATH is the root (e.g. from build.gradle), native libs are in sdk/native subdir
+if(EXISTS "${OPENCV_SDK_PATH}/sdk/native")
+    set(OPENCV_NATIVE_DIR ${OPENCV_SDK_PATH}/sdk/native)
+else()
+    set(OPENCV_NATIVE_DIR ${OPENCV_SDK_PATH})
 endif()
-include_directories(${OPENCV_INCLUDE_DIR})
+message(STATUS "OpenCV SDK path: ${OPENCV_SDK_PATH}")
+message(STATUS "OpenCV native dir: ${OPENCV_NATIVE_DIR}")
+include_directories(${OPENCV_NATIVE_DIR}/jni/include)
 
-# Prefer SDK .so; fallback to packaged jniLibs
-set(OPENCV_SO ${OPENCV_SDK_PATH}/sdk/native/libs/${ANDROID_ABI}/libopencv_java4.so)
-if (NOT EXISTS "${OPENCV_SO}")
-    set(OPENCV_SO ${CMAKE_CURRENT_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libopencv_java4.so)
-endif()
-if (NOT EXISTS "${OPENCV_SO}")
-    message(FATAL_ERROR "libopencv_java4.so not found for ABI ${ANDROID_ABI}")
-endif()
-message(STATUS "OpenCV shared lib: ${OPENCV_SO}")
-
+# OpenCV shared library
 add_library(lib_opencv SHARED IMPORTED)
-set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION ${OPENCV_SO})
+set_target_properties(lib_opencv PROPERTIES
+    IMPORTED_LOCATION ${OPENCV_NATIVE_DIR}/libs/${ANDROID_ABI}/libopencv_java4.so)
 
-add_library(native-lib SHARED
-        src/main/cpp/native-lib.cpp
+# Source files
+set(CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp)
+
+set(CORE_SOURCES
+    ${CPP_DIR}/core/frame.cpp
+    ${CPP_DIR}/core/hardware_buffer.cpp
 )
 
+set(ALGORITHM_SOURCES
+    ${CPP_DIR}/algorithms/face_detect.cpp
+    ${CPP_DIR}/algorithms/denoise.cpp
+    ${CPP_DIR}/algorithms/sharpen.cpp
+    ${CPP_DIR}/algorithms/bokeh.cpp
+    ${CPP_DIR}/algorithms/hdr.cpp
+    ${CPP_DIR}/algorithms/clahe.cpp
+    ${CPP_DIR}/algorithms/saturation.cpp
+)
+
+set(PIPELINE_SOURCES
+    ${CPP_DIR}/pipeline/pipeline_base.cpp
+    ${CPP_DIR}/pipeline/preview_pipeline.cpp
+    ${CPP_DIR}/pipeline/capture_pipeline.cpp
+)
+
+set(ENCODE_SOURCES
+    ${CPP_DIR}/encode/jpeg_encoder.cpp
+)
+
+set(JNI_SOURCES
+    ${CPP_DIR}/jni/jni_bridge.cpp
+)
+
+add_library(camera_engine SHARED
+    ${CORE_SOURCES}
+    ${ALGORITHM_SOURCES}
+    ${PIPELINE_SOURCES}
+    ${ENCODE_SOURCES}
+    ${JNI_SOURCES}
+)
+
+# Link libraries
 find_library(log-lib log)
 find_library(jnigraphics-lib jnigraphics)
 
-target_link_libraries(native-lib
-        lib_opencv
-        ${log-lib}
-        ${jnigraphics-lib}
+target_link_libraries(camera_engine
+    lib_opencv
+    android
+    ${log-lib}
+    ${jnigraphics-lib}
+)
+
+# Compile optimization
+target_compile_options(camera_engine PRIVATE
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Debug>:-O2>
 )

@@ -18,7 +18,7 @@ import androidx.fragment.app.Fragment;
 import androidx.preference.PreferenceManager;
 
 /**
- * 精简相机设置：仅接线生效项（人脸 / 网格 / 快门声）。
+ * Minimal camera settings: only wired items (face / grid / shutter sound).
  */
 public class SettingsFragment extends Fragment {
 
@@ -63,7 +63,7 @@ public class SettingsFragment extends Fragment {
         header.setGravity(android.view.Gravity.CENTER_VERTICAL);
 
         TextView back = new TextView(requireContext());
-        back.setText("← 返回");
+        back.setText("← Back");
         back.setTextSize(16);
         back.setTextColor(0xFFFFFFFF);
         back.setPadding(dp(8), dp(8), dp(16), dp(8));
@@ -71,7 +71,7 @@ public class SettingsFragment extends Fragment {
         header.addView(back);
 
         TextView title = new TextView(requireContext());
-        title.setText("设置");
+        title.setText("Settings");
         title.setTextSize(22);
         title.setTextColor(0xFFFFFFFF);
         header.addView(title);
@@ -89,7 +89,7 @@ public class SettingsFragment extends Fragment {
         root.addView(note);
 
         TextView version = new TextView(requireContext());
-        version.setText("OpenCV Camera v1.0.0");
+        version.setText(R.string.settings_version);
         version.setTextSize(12);
         version.setTextColor(0x60FFFFFF);
         version.setPadding(dp(24), dp(16), dp(24), dp(8));

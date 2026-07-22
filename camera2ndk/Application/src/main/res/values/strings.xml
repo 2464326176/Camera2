@@ -25,4 +25,39 @@
     <string name="picture">拍照</string>
     <string name="recording">录制中</string>
     <string name="description_info">描述信息</string>
+
+    <!-- 相机错误消息 -->
+    <string name="error_camera_not_ready">相机未就绪</string>
+    <string name="error_capturing">正在拍照</string>
+    <string name="error_preview_not_ready">预览未就绪</string>
+    <string name="error_no_frames">未收到图像帧</string>
+    <string name="error_camera_disconnected">相机断开连接</string>
+    <string name="error_camera_device">相机设备错误</string>
+    <string name="error_camera_disabled">相机被禁用</string>
+    <string name="error_camera_in_use">相机被占用</string>
+    <string name="error_camera_service">相机服务错误</string>
+    <string name="error_camera_not_found">未找到可用相机</string>
+    <string name="error_camera_permission">相机权限未授予</string>
+    <string name="error_camera_open_failed">打开相机失败</string>
+    <string name="error_preview_config_failed">预览配置失败</string>
+    <string name="error_recorder_not_ready">录像器未就绪</string>
+    <string name="error_recording_start_failed">开始录像失败</string>
+    <string name="error_capture_failed">拍照失败</string>
+    <string name="error_image_process_failed">图像处理失败</string>
+    <string name="error_save_failed">保存失败</string>
+    <string name="error_process_exception">处理异常</string>
+
+    <!-- 设置界面 -->
+    <string name="settings_face_detect_title">人脸检测</string>
+    <string name="settings_face_detect_desc">照片预览时检测并框选人脸</string>
+    <string name="settings_grid_title">默认网格线</string>
+    <string name="settings_grid_desc">打开相机时显示构图辅助线</string>
+    <string name="settings_shutter_sound_title">快门声音</string>
+    <string name="settings_shutter_sound_desc">拍照时播放快门声</string>
+    <string name="settings_flash_note">闪光灯请在预览顶栏切换：关 / 开 / 自动</string>
+    <string name="settings_back">← 返回</string>
+    <string name="settings_version">OpenCV Camera v1.0.0</string>
+
+    <!-- 重试按钮 -->
+    <string name="retry">重试</string>
 </resources>

@@ -4,9 +4,12 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.graphics.RectF;
+import android.media.ExifInterface;
 import android.media.MediaMetadataRetriever;
+import android.os.ParcelFileDescriptor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -30,8 +33,83 @@ public class CameraUtils {
     public static Uri saveJpegToGallery(Context context, byte[] jpeg, String prefix, int orientation) {
         if (jpeg == null || jpeg.length == 0) return null;
 
-        // Apply orientation by decoding if needed
-        Bitmap bitmap = ImageProcessor.jpegToBitmap(jpeg);
+        Log.d(TAG, "Saving JPEG: " + jpeg.length + " bytes, orientation=" + orientation);
+
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+                .format(new Date());
+        String fileName = prefix + "_" + timestamp + ".jpg";
+
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Images.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/" + ALBUM);
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        }
+
+        Uri uri = null;
+        try {
+            uri = context.getContentResolver().insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) return null;
+
+            // Write JPEG bytes directly to avoid double encoding quality loss
+            try (OutputStream os = context.getContentResolver().openOutputStream(uri)) {
+                if (os == null) return null;
+                os.write(jpeg);
+            }
+
+            // Write rotation via ExifInterface to avoid re-encoding
+            if (orientation != 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    try (ParcelFileDescriptor pfd = context.getContentResolver()
+                            .openFileDescriptor(uri, "rw")) {
+                        if (pfd != null) {
+                            ExifInterface exif = new ExifInterface(pfd.getFileDescriptor());
+                            int exifOrientation;
+                            switch (orientation) {
+                                case 90:  exifOrientation = ExifInterface.ORIENTATION_ROTATE_90;  break;
+                                case 180: exifOrientation = ExifInterface.ORIENTATION_ROTATE_180; break;
+                                case 270: exifOrientation = ExifInterface.ORIENTATION_ROTATE_270; break;
+                                default:  exifOrientation = ExifInterface.ORIENTATION_NORMAL; break;
+                            }
+                            exif.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(exifOrientation));
+                            exif.saveAttributes();
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to set EXIF orientation, using fallback", e);
+                    // Fallback: decode → rotate → re-encode (only when EXIF write fails)
+                    return saveJpegToGalleryWithReencode(context, jpeg, prefix, orientation, uri, values);
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear();
+                values.put(MediaStore.Images.Media.IS_PENDING, 0);
+                context.getContentResolver().update(uri, values, null, null);
+            }
+            return uri;
+        } catch (Exception e) {
+            Log.e(TAG, "saveJpegToGallery failed", e);
+            if (uri != null) {
+                try {
+                    context.getContentResolver().delete(uri, null, null);
+                } catch (Exception ignored) {
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Fallback: decode, rotate, then re-encode. Only used when EXIF write fails.
+     */
+    private static Uri saveJpegToGalleryWithReencode(Context context, byte[] jpeg, String prefix,
+                                                      int orientation, Uri existingUri,
+                                                      ContentValues existingValues) {
+        Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
         if (bitmap == null) return null;
 
         if (orientation != 0) {
@@ -44,7 +122,25 @@ public class CameraUtils {
                 bitmap = rotated;
             }
         }
-        return saveBitmapToGallery(context, bitmap, prefix);
+
+        try (OutputStream os = context.getContentResolver().openOutputStream(existingUri)) {
+            if (os == null) return null;
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, os)) {
+                return null;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "saveJpegToGalleryWithReencode failed", e);
+            return null;
+        } finally {
+            bitmap.recycle();
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            existingValues.clear();
+            existingValues.put(MediaStore.Images.Media.IS_PENDING, 0);
+            context.getContentResolver().update(existingUri, existingValues, null, null);
+        }
+        return existingUri;
     }
 
     public static Uri saveBitmapToGallery(Context context, Bitmap bitmap, String prefix) {
@@ -186,7 +282,7 @@ public class CameraUtils {
     }
 
     /**
-     * 从视频文件提取首帧缩略图。
+     * Extract first frame thumbnail from video file.
      */
     public static Bitmap createVideoThumbnail(File videoFile) {
         if (videoFile == null || !videoFile.exists()) return null;
@@ -206,7 +302,7 @@ public class CameraUtils {
     }
 
     /**
-     * TextureView transform：竖屏全屏 center-crop。
+     * TextureView transform: portrait fullscreen center-crop.
      */
     public static Matrix configureTransform(int viewWidth, int viewHeight,
                                              int previewWidth, int previewHeight,

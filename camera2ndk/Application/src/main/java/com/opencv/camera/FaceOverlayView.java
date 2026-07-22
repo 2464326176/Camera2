@@ -13,8 +13,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 人脸框覆盖层。
- * 输入为预览帧坐标系（传感器输出方向，通常横向），内部做旋转/镜像/缩放映射到 View。
+ * Face detection overlay.
+ * Input is in preview frame coordinate space (sensor output orientation, typically landscape).
+ * Internally applies rotation/mirroring/scale to map to the View.
  */
 public class FaceOverlayView extends View {
 
@@ -53,8 +54,8 @@ public class FaceOverlayView extends View {
     }
 
     /**
-     * @param width  预览帧宽（Image.getWidth）
-     * @param height 预览帧高
+     * @param width  preview frame width (Image.getWidth)
+     * @param height preview frame height
      */
     public void setPreviewSize(int width, int height) {
         this.imageWidth = width;
@@ -71,7 +72,7 @@ public class FaceOverlayView extends View {
     }
 
     /**
-     * 设置人脸框（图像坐标系：left,top,right,bottom）。
+     * Set face rectangles (image coordinate space: left,top,right,bottom).
      */
     public void setFaces(RectF[] faces) {
         faceRects.clear();

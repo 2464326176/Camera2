@@ -5,8 +5,8 @@ import android.util.AttributeSet;
 import android.view.TextureView;
 
 /**
- * 可按宽高比自适应的 TextureView。
- * ratio 为 0 时铺满父布局（由 transform 做 center-crop）。
+ * A TextureView that can adapt to a given aspect ratio.
+ * When ratio is 0, fills parent layout (center-crop via transform).
  */
 public class AutoFitTextureView extends TextureView {
 
