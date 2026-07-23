@@ -30,41 +30,57 @@ set_target_properties(lib_opencv PROPERTIES
 # Source files
 set(CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp)
 
+set(API_SOURCES
+    ${CPP_DIR}/src/api/camera_engine_api.cpp
+    ${CPP_DIR}/src/api/camera_engine_android.cpp
+)
+
 set(CORE_SOURCES
-    ${CPP_DIR}/core/frame.cpp
-    ${CPP_DIR}/core/hardware_buffer.cpp
+    ${CPP_DIR}/src/core/frame.cpp
+)
+
+set(PLATFORM_ANDROID_SOURCES
+    ${CPP_DIR}/src/platform/android/android_hardware_buffer.cpp
 )
 
 set(ALGORITHM_SOURCES
-    ${CPP_DIR}/algorithms/face_detect.cpp
-    ${CPP_DIR}/algorithms/denoise.cpp
-    ${CPP_DIR}/algorithms/sharpen.cpp
-    ${CPP_DIR}/algorithms/bokeh.cpp
-    ${CPP_DIR}/algorithms/hdr.cpp
-    ${CPP_DIR}/algorithms/clahe.cpp
-    ${CPP_DIR}/algorithms/saturation.cpp
+    ${CPP_DIR}/src/algorithms/face_detect.cpp
+    ${CPP_DIR}/src/algorithms/denoise.cpp
+    ${CPP_DIR}/src/algorithms/sharpen.cpp
+    ${CPP_DIR}/src/algorithms/bokeh.cpp
+    ${CPP_DIR}/src/algorithms/hdr.cpp
+    ${CPP_DIR}/src/algorithms/clahe.cpp
+    ${CPP_DIR}/src/algorithms/saturation.cpp
 )
 
 set(PIPELINE_SOURCES
-    ${CPP_DIR}/pipeline/pipeline_base.cpp
-    ${CPP_DIR}/pipeline/preview_pipeline.cpp
-    ${CPP_DIR}/pipeline/capture_pipeline.cpp
+    ${CPP_DIR}/src/pipeline/pipeline_base.cpp
+    ${CPP_DIR}/src/pipeline/preview_pipeline.cpp
+    ${CPP_DIR}/src/pipeline/capture_pipeline.cpp
 )
 
 set(ENCODE_SOURCES
-    ${CPP_DIR}/encode/jpeg_encoder.cpp
+    ${CPP_DIR}/src/encode/jpeg_encoder.cpp
 )
 
 set(JNI_SOURCES
-    ${CPP_DIR}/jni/jni_bridge.cpp
+    ${CPP_DIR}/src/bindings/jni/camera_engine_jni.cpp
 )
 
 add_library(camera_engine SHARED
+    ${API_SOURCES}
     ${CORE_SOURCES}
+    ${PLATFORM_ANDROID_SOURCES}
     ${ALGORITHM_SOURCES}
     ${PIPELINE_SOURCES}
     ${ENCODE_SOURCES}
     ${JNI_SOURCES}
+)
+
+target_include_directories(camera_engine PRIVATE
+    ${CPP_DIR}
+    ${CPP_DIR}/include
+    ${OPENCV_NATIVE_DIR}/jni/include
 )
 
 # Link libraries
