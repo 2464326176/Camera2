@@ -47,10 +47,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Camera2 wrapper: photo (ISO-adaptive multi-frame YUV) + video recording.
  */
-public class CameraController {
-    private static final String TAG = "CameraController";
+public class CameraEngine {
+    private static final String TAG = "CameraEngine";
     private static final int PREVIEW_TARGET_W = 1920;
-    private static final int PREVIEW_TARGET_H = 1440;
+    private static final int PREVIEW_TARGET_H = 1080;
     private static final int CAPTURE_MAX_PIXELS = 12_000_000; // ~12MP cap for NR performance
     private static final int MAX_BURST = 6;
     private static final int BURST_TIMEOUT_MS = 8000;
@@ -182,7 +182,7 @@ public class CameraController {
         default void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {}
     }
 
-    public CameraController(@NonNull Context context,
+    public CameraEngine(@NonNull Context context,
                             @NonNull ImageReader.OnImageAvailableListener previewListener) {
         this.context = context.getApplicationContext();
         this.previewListener = previewListener;
@@ -535,7 +535,7 @@ public class CameraController {
                 public void onCaptureSequenceCompleted(@NonNull CameraCaptureSession session,
                                                        int sequenceId, long frameNumber) {
                     if (backgroundHandler != null) {
-                        backgroundHandler.postDelayed(CameraController.this::unlockFocus, 100);
+                        backgroundHandler.postDelayed(CameraEngine.this::unlockFocus, 100);
                     }
                 }
 

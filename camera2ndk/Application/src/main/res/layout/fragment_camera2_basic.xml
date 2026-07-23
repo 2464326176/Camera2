@@ -21,8 +21,8 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <com.opencv.camera.FaceOverlayView
-            android:id="@+id/face_overlay"
+        <com.opencv.camera.CameraOverlayView
+            android:id="@+id/camera_overlay"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
     </FrameLayout>

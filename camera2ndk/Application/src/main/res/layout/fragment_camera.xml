@@ -18,24 +18,16 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
-    <com.opencv.camera.FaceOverlayView
-        android:id="@+id/face_overlay"
+    <com.opencv.camera.CameraOverlayView
+        android:id="@+id/camera_overlay"
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:layout_constraintBottom_toBottomOf="@id/texture_view"
         app:layout_constraintEnd_toEndOf="@id/texture_view"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="@id/texture_view"
-        app:layout_constraintTop_toTopOf="@id/texture_view" />
-
-    <com.opencv.camera.GridOverlayView
-        android:id="@+id/grid_overlay"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="@id/texture_view"
-        app:layout_constraintEnd_toEndOf="@id/texture_view"
-        app:layout_constraintStart_toStartOf="@id/texture_view"
-        app:layout_constraintTop_toTopOf="@id/texture_view" />
+        app:layout_constraintTop_toTopOf="@id/texture_view"
+        app:layout_constraintVertical_bias="0.0" />
 
     <ImageView
         android:id="@+id/focus_ring"
@@ -43,9 +35,9 @@
         android:layout_height="72dp"
         android:src="@drawable/bg_circle_button"
         android:visibility="gone"
-        tools:ignore="ContentDescription"
-        tools:layout_editor_absoluteX="0dp"
-        tools:layout_editor_absoluteY="0dp" />
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:ignore="ContentDescription" />
 
     <View
         android:id="@+id/capture_flash"
@@ -73,87 +65,117 @@
         tools:text="3" />
 
     <!-- Top gradient -->
-    <View
-        android:id="@+id/top_gradient"
-        android:layout_width="match_parent"
-        android:layout_height="100dp"
-        android:background="@drawable/bg_top_gradient"
-        app:layout_constraintTop_toTopOf="parent" />
 
     <!-- Top controls (padding applied via WindowInsets at runtime) -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/top_bar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingStart="8dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="8dp"
+        android:layout_height="80dp"
+        android:clipToPadding="false"
+        android:paddingStart="20dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="20dp"
         android:paddingBottom="8dp"
         app:layout_constraintTop_toTopOf="parent">
 
-        <ImageView
-            android:id="@+id/btn_flash"
-            style="@style/TopControlButton"
-            android:src="@drawable/ic_flash_off"
+        <View
+            android:id="@+id/top_gradient"
+            android:layout_width="0dp"
+            android:layout_height="100dp"
+            android:background="@drawable/bg_top_gradient"
+            app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:ignore="ContentDescription" />
+            app:layout_constraintTop_toTopOf="parent" />
 
-        <TextView
-            android:id="@+id/flash_label"
-            style="@style/SettingsLabel"
+        <LinearLayout
+            android:id="@+id/top_left_group"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/flash_off"
-            app:layout_constraintBottom_toBottomOf="@id/btn_flash"
-            app:layout_constraintStart_toEndOf="@id/btn_flash"
-            app:layout_constraintTop_toTopOf="@id/btn_flash" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
+
+            <FrameLayout
+                android:layout_width="52dp"
+                android:layout_height="56dp">
+
+                <ImageView
+                    android:id="@+id/btn_flash"
+                    style="@style/TopControlButton"
+                    android:layout_gravity="top|center_horizontal"
+                    android:src="@drawable/ic_flash_off"
+                    tools:ignore="ContentDescription" />
+
+                <TextView
+                    android:id="@+id/flash_label"
+                    style="@style/TopControlLabel"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:text="@string/flash_off" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="52dp"
+                android:layout_height="56dp"
+                android:layout_marginStart="2dp">
+
+                <ImageView
+                    android:id="@+id/btn_timer"
+                    style="@style/TopControlButton"
+                    android:layout_gravity="top|center_horizontal"
+                    android:src="@drawable/ic_timer"
+                    tools:ignore="ContentDescription" />
+
+                <TextView
+                    android:id="@+id/timer_label"
+                    style="@style/TopControlLabel"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:text="@string/timer_off" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/btn_ai"
+            style="@style/TopControlTextButton"
+            android:layout_width="wrap_content"
+            android:minWidth="44dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="AI"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <LinearLayout
+            android:id="@+id/top_right_group"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
+
+            <TextView
+                android:id="@+id/aspect_ratio_button"
+                style="@style/TopControlTextButton"
+                android:text="FULL" />
+
+            <ImageView
+                android:id="@+id/btn_settings"
+                style="@style/TopControlButton"
+                android:layout_marginStart="6dp"
+                android:src="@drawable/ic_settings"
+                tools:ignore="ContentDescription" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/iso_label"
-            style="@style/SettingsLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            style="@style/TopControlLabel"
             android:text="ISO --"
             android:textColor="@color/gc_accent"
-            app:layout_constraintBottom_toBottomOf="@id/btn_flash"
-            app:layout_constraintEnd_toStartOf="@id/btn_timer"
-            app:layout_constraintStart_toEndOf="@id/flash_label"
-            app:layout_constraintTop_toTopOf="@id/btn_flash" />
-
-        <ImageView
-            android:id="@+id/btn_timer"
-            style="@style/TopControlButton"
-            android:src="@drawable/ic_timer"
-            app:layout_constraintEnd_toStartOf="@id/btn_grid"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:ignore="ContentDescription" />
-
-        <TextView
-            android:id="@+id/timer_label"
-            style="@style/SettingsLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/timer_off"
-            app:layout_constraintBottom_toBottomOf="@id/btn_timer"
-            app:layout_constraintEnd_toStartOf="@id/btn_grid"
-            app:layout_constraintTop_toTopOf="@id/btn_timer" />
-
-        <ImageView
-            android:id="@+id/btn_grid"
-            style="@style/TopControlButton"
-            android:src="@drawable/ic_grid"
-            app:layout_constraintEnd_toStartOf="@id/btn_settings"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:ignore="ContentDescription" />
-
-        <ImageView
-            android:id="@+id/btn_settings"
-            style="@style/TopControlButton"
-            android:src="@drawable/ic_settings"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:ignore="ContentDescription" />
+            app:layout_constraintEnd_toEndOf="@id/btn_ai"
+            app:layout_constraintStart_toStartOf="@id/btn_ai"
+            app:layout_constraintTop_toBottomOf="@id/btn_ai" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <!-- Recording timer -->
@@ -355,5 +377,20 @@
         app:layout_constraintBottom_toTopOf="@id/processing_indicator"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
+
+    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <androidx.constraintlayout.widget.Barrier android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <androidx.constraintlayout.widget.Barrier android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

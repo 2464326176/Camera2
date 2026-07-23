@@ -67,7 +67,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Preview: OpenCV YuNet face detection
  * Capture: ISO-adaptive single / 3–6 frame OpenCV denoising
  */
-public class CameraFragment extends Fragment implements CameraController.CameraCallback {
+public class CameraFragment extends Fragment implements CameraEngine.CameraCallback {
 
     private static final String TAG = "CameraFragment";
     private static final int REQUEST_PERMISSIONS = 100;
@@ -78,8 +78,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private AutoFitTextureView textureView;
-    private FaceOverlayView faceOverlay;
-    private GridOverlayView gridOverlay;
+    private CameraOverlayView cameraOverlay;
     private ImageView focusRing;
     private View captureFlash;
     private TextView countdownText;
@@ -93,7 +92,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     private TextView flashLabel;
     private ImageView btnTimer;
     private TextView timerLabel;
-    private ImageView btnGrid;
+    private TextView btnAi;
+    private TextView aspectRatioButton;
     private ImageView btnSettings;
     private TextView isoLabel;
     private TextView zoomLabel;
@@ -106,31 +106,28 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     private ConstraintLayout bottomBar;
     private View modeContainer;
 
-    private CameraController cameraController;
+    private CameraEngine cameraEngine;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService processExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean faceBusy = new AtomicBoolean(false);
     private MediaActionSound shutterSound;
 
+    private static final int ASPECT_FULL = 0;
+    private static final int ASPECT_1_1 = 1;
+    private static final int ASPECT_16_9 = 2;
+    private static final int ASPECT_4_3 = 3;
+
     private boolean isCapturing = false;
     private int timerSeconds = 0;
+    private int aspectMode = ASPECT_FULL;
+    private boolean isAiEnabled = false;
     private boolean isGridVisible = false;
     private boolean faceDetectEnabled = true;
     private boolean shutterSoundEnabled = true;
-    private Uri lastMediaUri = null;
-    private int uiMode = CameraController.MODE_PHOTO;
-    private int flashMode = CameraController.FLASH_OFF;
-
-    // 3-stage thumbnail pipeline:
-    //   Stage 1: preview frame → instant thumbnail (on shutter click)
-    //   Stage 2: first capture frame → thumbnail update (when HAL delivers)
-    //   Stage 3: final post-processed JPEG → thumbnail + gallery save (after algorithm)
-    private static final int THUMB_STAGE_NONE = 0;
-    private static final int THUMB_STAGE_PREVIEW = 1;
-    private static final int THUMB_STAGE_CAPTURE = 2;
-    private static final int THUMB_STAGE_PROCESSED = 3;
-    private int thumbnailStage = THUMB_STAGE_NONE;
-    private Uri finalMediaUri = null; // URI of final processed image in current capture session
+    private int uiMode = CameraEngine.MODE_PHOTO;
+    private int flashMode = CameraEngine.FLASH_OFF;
+    private final CameraMediaStore cameraMediaStore = new CameraMediaStore();
+    private long activePhotoCaptureId = 0L;
 
     // NativeEngine handles
     private long mEngineHandle = 0;
@@ -146,7 +143,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     private final Runnable recordingTick = new Runnable() {
         @Override
         public void run() {
-            if (cameraController == null || !cameraController.isRecording()) return;
+            if (cameraEngine == null || !cameraEngine.isRecording()) return;
             long sec = (SystemClock.elapsedRealtime() - recordingStartElapsed) / 1000;
             long m = sec / 60;
             long s = sec % 60;
@@ -194,8 +191,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
     private void initViews(View root) {
         textureView = root.findViewById(R.id.texture_view);
-        faceOverlay = root.findViewById(R.id.face_overlay);
-        gridOverlay = root.findViewById(R.id.grid_overlay);
+        cameraOverlay = root.findViewById(R.id.camera_overlay);
         focusRing = root.findViewById(R.id.focus_ring);
         captureFlash = root.findViewById(R.id.capture_flash);
         countdownText = root.findViewById(R.id.countdown_text);
@@ -211,7 +207,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         flashLabel = root.findViewById(R.id.flash_label);
         btnTimer = root.findViewById(R.id.btn_timer);
         timerLabel = root.findViewById(R.id.timer_label);
-        btnGrid = root.findViewById(R.id.btn_grid);
+        btnAi = root.findViewById(R.id.btn_ai);
+        aspectRatioButton = root.findViewById(R.id.aspect_ratio_button);
         btnSettings = root.findViewById(R.id.btn_settings);
         isoLabel = root.findViewById(R.id.iso_label);
         zoomLabel = root.findViewById(R.id.zoom_label);
@@ -237,11 +234,14 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
         btnShutter.setOnClickListener(v -> onShutterClick());
         btnSwitchCamera.setOnClickListener(v -> onSwitchCamera());
-        thumbnail.setOnClickListener(v -> onThumbnailClick());
+        thumbnail.setOnClickListener(v -> onThumbnailClicked());
         btnFlash.setOnClickListener(v -> cycleFlash());
         btnTimer.setOnClickListener(v -> cycleTimer());
-        btnGrid.setOnClickListener(v -> toggleGrid());
+        btnAi.setOnClickListener(v -> toggleAiMode());
+        aspectRatioButton.setOnClickListener(v -> cycleAspectRatio());
         btnSettings.setOnClickListener(v -> openSettings());
+        updateAiModeUi();
+        updateAspectRatioUi();
     }
 
     private void applyWindowInsets(View root) {
@@ -269,21 +269,21 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         shutterSoundEnabled = prefs.getBoolean(SettingsFragment.KEY_SOUND, true);
         boolean gridDefault = prefs.getBoolean(SettingsFragment.KEY_GRID_DEFAULT, false);
         isGridVisible = gridDefault;
-        if (gridOverlay != null) {
-            gridOverlay.setVisibility(isGridVisible ? View.VISIBLE : View.GONE);
+        if (cameraOverlay != null) {
+            cameraOverlay.setGridVisible(isGridVisible);
         }
-        if (!faceDetectEnabled && faceOverlay != null) {
-            faceOverlay.clearFaces();
+        if (!faceDetectEnabled && cameraOverlay != null) {
+            cameraOverlay.clearFaces();
         }
-        if (cameraController != null) {
-            cameraController.setFaceDetectEnabled(faceDetectEnabled);
-            cameraController.setFlashMode(flashMode);
+        if (cameraEngine != null) {
+            cameraEngine.setFaceDetectEnabled(faceDetectEnabled);
+            cameraEngine.setFlashMode(flashMode);
         }
     }
 
     private void initCamera() {
-        cameraController = new CameraController(requireContext(), previewImageListener);
-        cameraController.setCallback(this);
+        cameraEngine = new CameraEngine(requireContext(), previewImageListener);
+        cameraEngine.setCallback(this);
 
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
@@ -298,8 +298,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
 
             @Override
             public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
-                if (cameraController != null) {
-                    cameraController.stopCamera();
+                if (cameraEngine != null) {
+                    cameraEngine.stopCamera();
                 }
                 return true;
             }
@@ -341,23 +341,23 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private String[] requiredPermissions() {
-        if (uiMode == CameraController.MODE_VIDEO) {
+        if (uiMode == CameraEngine.MODE_VIDEO) {
             return new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
         }
         return new String[]{Manifest.permission.CAMERA};
     }
 
     private void startCameraSession() {
-        if (cameraController == null || textureView == null) return;
+        if (cameraEngine == null || textureView == null) return;
         Log.d(TAG, "startCameraSession mode=" + uiMode);
-        cameraController.setCaptureMode(uiMode == CameraController.MODE_VIDEO
-                ? CameraController.MODE_VIDEO
-                : CameraController.MODE_PHOTO);
-        cameraController.setFlashMode(flashMode);
-        cameraController.setFaceDetectEnabled(faceDetectEnabled);
-        cameraController.startCamera();
+        cameraEngine.setCaptureMode(uiMode == CameraEngine.MODE_VIDEO
+                ? CameraEngine.MODE_VIDEO
+                : CameraEngine.MODE_PHOTO);
+        cameraEngine.setFlashMode(flashMode);
+        cameraEngine.setFaceDetectEnabled(faceDetectEnabled);
+        cameraEngine.startCamera();
         if (textureView.isAvailable()) {
-            cameraController.createPreviewSession(textureView.getSurfaceTexture());
+            cameraEngine.createPreviewSession(textureView.getSurfaceTexture());
         }
     }
 
@@ -368,19 +368,12 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         Log.i(TAG, "Camera opened, preview=" + previewSize);
         mainHandler.post(() -> {
             if (!isAdded() || previewSize == null) return;
-            // Portrait display: swap for aspect if sensor is landscape
-            int displayW = previewSize.getHeight();
-            int displayH = previewSize.getWidth();
-            if (previewSize.getWidth() < previewSize.getHeight()) {
-                displayW = previewSize.getWidth();
-                displayH = previewSize.getHeight();
-            }
-            // Full-screen preview — keep TextureView filling parent; transform handles crop
+            // Keep TextureView filling parent; transform applies aspect-preserving center crop.
             textureView.setAspectRatio(0, 0);
-            faceOverlay.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
-            faceOverlay.setCameraInfo(
-                    cameraController.getSensorOrientation(),
-                    cameraController.isFrontCamera());
+            cameraOverlay.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
+            cameraOverlay.setCameraInfo(
+                    cameraEngine.getSensorOrientation(),
+                    cameraEngine.isFrontCamera());
             configureTransform(textureView.getWidth(), textureView.getHeight());
             animateControlsIn();
         });
@@ -421,8 +414,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     public void onIsoUpdated(int iso) {
         mainHandler.post(() -> {
             if (isoLabel == null) return;
-            if (uiMode == CameraController.MODE_PHOTO) {
-                int frames = cameraController.frameCountForIso(iso);
+            if (uiMode == CameraEngine.MODE_PHOTO) {
+                int frames = cameraEngine.frameCountForIso(iso);
                 isoLabel.setText(String.format(Locale.US, "ISO %d · %df", iso, frames));
             } else {
                 isoLabel.setText(String.format(Locale.US, "ISO %d", iso));
@@ -457,15 +450,14 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             if (success && file != null) {
                 final File videoSrc = file;
                 processExecutor.execute(() -> {
-                    Bitmap thumb = CameraUtils.createVideoThumbnail(videoSrc);
-                    Uri uri = CameraUtils.saveVideoToGallery(
+                    Bitmap thumb = CameraMediaStore.createVideoThumbnail(videoSrc);
+                    Uri uri = CameraMediaStore.saveVideoToGallery(
                             requireContext().getApplicationContext(), videoSrc);
                     mainHandler.post(() -> {
                         if (uri != null) {
-                            lastMediaUri = uri;
-                            if (thumb != null) {
-                                updateThumbnail(thumb);
-                            }
+                            Bitmap thumbnailBitmap = thumb != null ? createThumbnailBitmap(thumb) : null;
+                            renderThumbnailState(cameraMediaStore.setVideoSaved(uri, thumbnailBitmap), true);
+                            if (thumb != null && !thumb.isRecycled()) thumb.recycle();
                             showSuccess(getString(R.string.video_saved));
                         } else {
                             showError(getString(R.string.video_save_failed));
@@ -486,7 +478,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             image = reader.acquireLatestImage();
             if (image == null) return;
 
-            if (uiMode != CameraController.MODE_PHOTO || !faceDetectEnabled) {
+            if (uiMode != CameraEngine.MODE_PHOTO || !faceDetectEnabled) {
                 return;
             }
 
@@ -504,7 +496,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             FrameMetadata meta = null;
             if (NativeEngine.supportsHardwareBuffer()) {
                 hwBuf = image.getHardwareBuffer();
-                meta = cameraController.extractMetadata(cameraController.getLastCaptureResult());
+                meta = cameraEngine.extractMetadata(cameraEngine.getLastCaptureResult());
             }
 
             final int imgW = image.getWidth();
@@ -524,13 +516,13 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                     float[] faceData = NativeEngine.getInstance().nativeProcessPreviewFrame(
                             mPreviewPipeline, finalBuf, finalMeta);
                     mainHandler.post(() -> {
-                        if (!isAdded() || faceOverlay == null) return;
-                        if (!faceDetectEnabled || uiMode != CameraController.MODE_PHOTO) {
-                            faceOverlay.clearFaces();
+                        if (!isAdded() || cameraOverlay == null) return;
+                        if (!faceDetectEnabled || uiMode != CameraEngine.MODE_PHOTO) {
+                            cameraOverlay.clearFaces();
                             return;
                         }
-                        faceOverlay.setPreviewSize(imgW, imgH);
-                        faceOverlay.setFaces(parseFaceResults(faceData));
+                        cameraOverlay.setPreviewSize(imgW, imgH);
+                        cameraOverlay.setFaces(parseFaceResults(faceData));
                     });
                 } finally {
                     finalBuf.close();
@@ -553,8 +545,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     // ---------- Shutter / Capture ----------
 
     private void onShutterClick() {
-        Log.d(TAG, "Shutter clicked, mode=" + (uiMode == CameraController.MODE_VIDEO ? "VIDEO" : "PHOTO"));
-        if (uiMode == CameraController.MODE_VIDEO) {
+        Log.d(TAG, "Shutter clicked, mode=" + (uiMode == CameraEngine.MODE_VIDEO ? "VIDEO" : "PHOTO"));
+        if (uiMode == CameraEngine.MODE_VIDEO) {
             toggleVideoRecording();
             return;
         }
@@ -571,11 +563,11 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void toggleVideoRecording() {
-        if (cameraController == null) return;
+        if (cameraEngine == null) return;
         btnShutter.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        if (cameraController.isRecording()) {
+        if (cameraEngine.isRecording()) {
             Log.i(TAG, "Stopping video recording");
-            cameraController.stopRecording();
+            cameraEngine.stopRecording();
         } else {
             // Ensure mic permission
             if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO)
@@ -584,12 +576,12 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 return;
             }
             Log.i(TAG, "Starting video recording");
-            cameraController.startRecording();
+            cameraEngine.startRecording();
         }
     }
 
     private void doCapture() {
-        if (cameraController == null || isCapturing) return;
+        if (cameraEngine == null || isCapturing) return;
         isCapturing = true;
         saveProgress.setVisibility(View.VISIBLE);
         animateCaptureFlash();
@@ -600,41 +592,46 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             }
         }
 
-        int iso = cameraController.getCurrentIso();
-        int frames = cameraController.frameCountForIso(iso);
-        Log.i(TAG, "Capture started: iso=" + iso + " frames=" + frames);
+        int iso = cameraEngine.getCurrentIso();
+        int frames = cameraEngine.frameCountForIso(iso);
+        activePhotoCaptureId = cameraMediaStore.beginPhotoCapture();
+        renderThumbnailState(cameraMediaStore.getCurrentState(), false);
+        Log.i(TAG, "Capture started: iso=" + iso + " frames=" + frames + " captureId=" + activePhotoCaptureId);
 
         // Stage 1: Capture preview frame as instant thumbnail
-        capturePreviewAsThumbnail();
+        capturePreviewAsThumbnail(activePhotoCaptureId);
 
         processingText.setText(frames <= 1
                 ? getString(R.string.capture_processing)
                 : getString(R.string.capture_frames, frames));
         processingIndicator.setVisibility(View.VISIBLE);
 
-        cameraController.setFrameCallback(new CameraController.FrameCallback() {
+        cameraEngine.setFrameCallback(new CameraEngine.FrameCallback() {
             @Override
             public void onFirstCaptureFrame(byte[] nv21Data, int width, int height, FrameMetadata metadata) {
                 // Stage 2: First capture frame arrived — update thumbnail
                 Log.d(TAG, "First capture frame: " + width + "x" + height + " iso=" + metadata.iso);
-                processExecutor.execute(() -> updateThumbnailFromCaptureFrame(nv21Data, width, height));
+                long captureId = activePhotoCaptureId;
+                processExecutor.execute(() -> updateThumbnailFromCaptureFrame(captureId, nv21Data, width, height));
             }
 
             @Override
             public void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
                 // Stage 3: All frames ready — run algorithm post-processing
                 Log.i(TAG, "Burst complete: " + buffers.size() + " frames, starting post-processing");
-                processExecutor.execute(() -> processAndSave(buffers, metadataList));
+                long captureId = activePhotoCaptureId;
+                processExecutor.execute(() -> processAndSave(captureId, buffers, metadataList));
             }
         });
 
-        cameraController.captureStillBurst(new CameraController.BurstCallback() {
+        cameraEngine.captureStillBurst(new CameraEngine.BurstCallback() {
             @Override
             public void onBurstComplete(List<byte[]> nv21Frames, int width, int height, int captureIso) {
                 // Legacy fallback: only used when HardwareBuffer is unavailable
                 if (!NativeEngine.supportsHardwareBuffer()) {
                     Log.d(TAG, "Falling back to legacy NV21 path");
-                    processExecutor.execute(() -> processAndSaveLegacy(nv21Frames, width, height, captureIso));
+                    long captureId = activePhotoCaptureId;
+                    processExecutor.execute(() -> processAndSaveLegacy(captureId, nv21Frames, width, height, captureIso));
                 }
             }
 
@@ -645,23 +642,21 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                     isCapturing = false;
                     saveProgress.setVisibility(View.GONE);
                     processingIndicator.setVisibility(View.GONE);
-                    thumbnailStage = THUMB_STAGE_NONE;
-                    finalMediaUri = null;
+                    renderThumbnailState(cameraMediaStore.setPhotoSaveFailed(activePhotoCaptureId, null), false);
                     showError(getString(R.string.error_capture_failed) + ": " + reason);
                 });
             }
         });
     }
 
-    private void capturePreviewAsThumbnail() {
+    private void capturePreviewAsThumbnail(long captureId) {
         // Stage 1: Instant thumbnail from current preview frame
         if (textureView == null) return;
         try {
             Bitmap previewBmp = textureView.getBitmap();
             if (previewBmp != null) {
-                thumbnailStage = THUMB_STAGE_PREVIEW;
-                finalMediaUri = null; // Clear previous session's final URI
-                updateThumbnail(previewBmp);
+                Bitmap thumbnailBitmap = createThumbnailBitmap(previewBmp);
+                renderThumbnailState(cameraMediaStore.setTemporaryPhotoThumbnail(captureId, thumbnailBitmap), true);
                 previewBmp.recycle();
                 Log.d(TAG, "Preview frame captured as instant thumbnail");
             }
@@ -671,32 +666,35 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     /**
-     * Stage 2: Save the first capture frame to gallery as a "raw" reference image.
-     * When the user clicks the thumbnail at this stage, the gallery opens showing
-     * this capture frame. Later, Stage 3 will replace it with the final processed image.
-     * Uses Android YuvImage for fast JPEG encoding without going through the C++ pipeline.
+     * Stage 2: Render the first capture frame as a temporary thumbnail.
+     * The temporary frame is not persisted and cannot be opened from the thumbnail.
      */
-    private void updateThumbnailFromCaptureFrame(byte[] nv21Data, int width, int height) {
+    private void updateThumbnailFromCaptureFrame(long captureId, byte[] nv21Data, int width, int height) {
         try {
-            Log.d(TAG, "Stage 2: saving first capture frame to gallery: " + width + "x" + height);
+            Log.d(TAG, "Stage 2: rendering first capture frame thumbnail: " + width + "x" + height);
             YuvImage yuv = new YuvImage(nv21Data, ImageFormat.NV21, width, height, null);
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
             yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 92, out);
             byte[] jpeg = out.toByteArray();
 
-            int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
-            Uri uri = CameraUtils.saveJpegToGallery(
-                    requireContext().getApplicationContext(), jpeg, "OPENCV_RAW", orientation);
-
+            int orientation = cameraEngine != null ? cameraEngine.getJpegOrientation() : 90;
             Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-            if (thumb != null) {
-                mainHandler.post(() -> {
-                    thumbnailStage = THUMB_STAGE_CAPTURE;
-                    finalMediaUri = uri;
-                    lastMediaUri = uri;
-                    updateThumbnail(thumb);
+            if (thumb != null && orientation != 0) {
+                Matrix matrix = new Matrix();
+                matrix.postRotate(orientation);
+                Bitmap rotated = Bitmap.createBitmap(thumb, 0, 0,
+                        thumb.getWidth(), thumb.getHeight(), matrix, true);
+                if (rotated != thumb) {
                     thumb.recycle();
-                    Log.d(TAG, "Stage 2: capture frame saved to gallery, uri=" + uri);
+                    thumb = rotated;
+                }
+            }
+            if (thumb != null) {
+                Bitmap thumbnailBitmap = createThumbnailBitmap(thumb);
+                thumb.recycle();
+                mainHandler.post(() -> {
+                    renderThumbnailState(cameraMediaStore.setTemporaryPhotoThumbnail(captureId, thumbnailBitmap), true);
+                    Log.d(TAG, "Stage 2: capture frame rendered as temporary thumbnail");
                 });
             }
         } catch (Exception e) {
@@ -704,7 +702,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         }
     }
 
-    private void processAndSave(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
+    private void processAndSave(long captureId, List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
         try {
             Log.i(TAG, "Stage 3: post-processing " + buffers.size() + " frames via HardwareBuffer");
             byte[] jpeg = NativeEngine.getInstance().nativeProcessCapture(
@@ -723,17 +721,11 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 return;
             }
 
-            int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
+            int orientation = cameraEngine != null ? cameraEngine.getJpegOrientation() : 90;
 
-            // Stage 3: Replace the Stage 2 capture-frame gallery entry with the final processed image.
-            // The intermediary raw frame is deleted; the final post-processed JPEG takes its place.
-            final Uri oldUri = finalMediaUri;
-            if (oldUri != null) {
-                Log.d(TAG, "Stage 3: deleting intermediate capture frame: " + oldUri);
-                CameraUtils.deleteGalleryEntry(requireContext().getApplicationContext(), oldUri);
-            }
+            // Stage 3 saves the final processed image. Temporary thumbnails are not persisted.
 
-            Uri uri = CameraUtils.saveJpegToGallery(
+            Uri uri = CameraMediaStore.saveJpegToGallery(
                     requireContext().getApplicationContext(), jpeg, "OPENCV", orientation);
 
             Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
@@ -755,18 +747,15 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 saveProgress.setVisibility(View.GONE);
                 processingIndicator.setVisibility(View.GONE);
                 if (uri != null) {
-                    lastMediaUri = uri;
-                    finalMediaUri = uri;
-                    thumbnailStage = THUMB_STAGE_PROCESSED;
-                    if (finalThumb != null) {
-                        updateThumbnail(finalThumb);
-                        if (!finalThumb.isRecycled()) finalThumb.recycle();
-                    }
+                    Bitmap thumbnailBitmap = finalThumb != null ? createThumbnailBitmap(finalThumb) : null;
+                    renderThumbnailState(cameraMediaStore.setPhotoSaved(captureId, thumbnailBitmap, uri), false);
+                    if (finalThumb != null && !finalThumb.isRecycled()) finalThumb.recycle();
                     Log.i(TAG, "Stage 3: final processed image saved, uri=" + uri);
                     showSuccess(getString(R.string.photo_saved)
                             + " · " + frameCount + " frames");
                 } else {
                     Log.e(TAG, "Stage 3: save failed");
+                    renderThumbnailState(cameraMediaStore.setPhotoSaveFailed(captureId, finalThumb), false);
                     showError("Save failed");
                 }
             });
@@ -789,7 +778,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     /**
      * Legacy fallback: process via NV21 byte[] when HardwareBuffer is unavailable.
      */
-    private void processAndSaveLegacy(List<byte[]> frames, int width, int height, int iso) {
+    private void processAndSaveLegacy(long captureId, List<byte[]> frames, int width, int height, int iso) {
         try {
             Log.i(TAG, "Post-processing " + frames.size() + " frames (legacy) @ " + width + "x" + height
                     + " iso=" + iso);
@@ -813,8 +802,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 return;
             }
 
-            int orientation = cameraController != null ? cameraController.getJpegOrientation() : 90;
-            Uri uri = CameraUtils.saveJpegToGallery(
+            int orientation = cameraEngine != null ? cameraEngine.getJpegOrientation() : 90;
+            Uri uri = CameraMediaStore.saveJpegToGallery(
                     requireContext().getApplicationContext(), jpeg, "OPENCV", orientation);
 
             Bitmap thumb = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
@@ -835,16 +824,13 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 saveProgress.setVisibility(View.GONE);
                 processingIndicator.setVisibility(View.GONE);
                 if (uri != null) {
-                    lastMediaUri = uri;
-                    finalMediaUri = uri;
-                    thumbnailStage = THUMB_STAGE_PROCESSED;
-                    if (finalThumb != null) {
-                        updateThumbnail(finalThumb);
-                        if (!finalThumb.isRecycled()) finalThumb.recycle();
-                    }
+                    Bitmap thumbnailBitmap = finalThumb != null ? createThumbnailBitmap(finalThumb) : null;
+                    renderThumbnailState(cameraMediaStore.setPhotoSaved(captureId, thumbnailBitmap, uri), false);
+                    if (finalThumb != null && !finalThumb.isRecycled()) finalThumb.recycle();
                     showSuccess(getString(R.string.photo_saved)
                             + " · " + frames.size() + " frames ISO" + iso);
                 } else {
+                    renderThumbnailState(cameraMediaStore.setPhotoSaveFailed(captureId, finalThumb), false);
                     showError("Save failed");
                 }
             });
@@ -899,7 +885,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     // ---------- UI controls ----------
 
     private void onSwitchCamera() {
-        if (cameraController == null || cameraController.isRecording() || isCapturing) return;
+        if (cameraEngine == null || cameraEngine.isRecording() || isCapturing) return;
         Log.i(TAG, "Switching camera");
         btnSwitchCamera.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
         btnSwitchCamera.animate()
@@ -908,12 +894,12 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 .setInterpolator(new AccelerateDecelerateInterpolator())
                 .start();
 
-        faceOverlay.clearFaces();
+        cameraOverlay.clearFaces();
         textureView.animate()
                 .alpha(0f)
                 .setDuration(120)
                 .withEndAction(() -> {
-                    cameraController.switchCamera(textureView.getSurfaceTexture());
+                    cameraEngine.switchCamera(textureView.getSurfaceTexture());
                     textureView.animate()
                             .alpha(1f)
                             .setDuration(150)
@@ -924,24 +910,24 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void cycleFlash() {
-        if (cameraController == null) return;
+        if (cameraEngine == null) return;
         flashMode = (flashMode + 1) % 3;
-        cameraController.setFlashMode(flashMode);
+        cameraEngine.setFlashMode(flashMode);
         updateFlashUi();
         bounce(btnFlash);
     }
 
     private void updateFlashUi() {
         switch (flashMode) {
-            case CameraController.FLASH_ON:
+            case CameraEngine.FLASH_ON:
                 btnFlash.setImageResource(R.drawable.ic_flash_on);
                 flashLabel.setText(R.string.flash_on);
                 break;
-            case CameraController.FLASH_AUTO:
+            case CameraEngine.FLASH_AUTO:
                 btnFlash.setImageResource(R.drawable.ic_flash_auto);
                 flashLabel.setText(R.string.flash_auto);
                 break;
-            case CameraController.FLASH_OFF:
+            case CameraEngine.FLASH_OFF:
             default:
                 btnFlash.setImageResource(R.drawable.ic_flash_off);
                 flashLabel.setText(R.string.flash_off);
@@ -950,7 +936,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void openSettings() {
-        if (cameraController != null && cameraController.isRecording()) return;
+        if (cameraEngine != null && cameraEngine.isRecording()) return;
         getParentFragmentManager()
                 .beginTransaction()
                 .setCustomAnimations(android.R.anim.fade_in, android.R.anim.fade_out,
@@ -971,19 +957,76 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         bounce(btnTimer);
     }
 
-    private void toggleGrid() {
-        isGridVisible = !isGridVisible;
-        if (isGridVisible) {
-            gridOverlay.setVisibility(View.VISIBLE);
-            gridOverlay.cycleGridMode();
-        } else {
-            gridOverlay.setVisibility(View.GONE);
+    private void toggleAiMode() {
+        isAiEnabled = !isAiEnabled;
+        updateAiModeUi();
+        Log.d(TAG, "AI mode toggled: " + (isAiEnabled ? "open" : "close"));
+        bounce(btnAi);
+    }
+
+    private void updateAiModeUi() {
+        if (btnAi == null) return;
+        btnAi.setText(isAiEnabled ? "AI ON" : "AI");
+        btnAi.setAlpha(isAiEnabled ? 1f : 0.82f);
+    }
+
+    private void cycleAspectRatio() {
+        switch (aspectMode) {
+            case ASPECT_FULL:
+                aspectMode = ASPECT_1_1;
+                break;
+            case ASPECT_1_1:
+                aspectMode = ASPECT_16_9;
+                break;
+            case ASPECT_16_9:
+                aspectMode = ASPECT_4_3;
+                break;
+            case ASPECT_4_3:
+            default:
+                aspectMode = ASPECT_FULL;
+                break;
         }
-        PreferenceManager.getDefaultSharedPreferences(requireContext())
-                .edit()
-                .putBoolean(SettingsFragment.KEY_GRID_DEFAULT, isGridVisible)
-                .apply();
-        bounce(btnGrid);
+        updateAspectRatioUi();
+        if (textureView != null) {
+            configureTransform(textureView.getWidth(), textureView.getHeight());
+        }
+        bounce(aspectRatioButton);
+    }
+
+    private void updateAspectRatioUi() {
+        if (aspectRatioButton == null) return;
+        aspectRatioButton.setText(getAspectRatioLabel());
+        if (cameraOverlay != null) {
+            cameraOverlay.setTargetAspectRatio(getTargetAspectRatio());
+        }
+    }
+
+    private String getAspectRatioLabel() {
+        switch (aspectMode) {
+            case ASPECT_1_1:
+                return "1:1";
+            case ASPECT_16_9:
+                return "16:9";
+            case ASPECT_4_3:
+                return "4:3";
+            case ASPECT_FULL:
+            default:
+                return "FULL";
+        }
+    }
+
+    private float getTargetAspectRatio() {
+        switch (aspectMode) {
+            case ASPECT_1_1:
+                return 1f;
+            case ASPECT_16_9:
+                return 16f / 9f;
+            case ASPECT_4_3:
+                return 4f / 3f;
+            case ASPECT_FULL:
+            default:
+                return 0f;
+        }
     }
 
     private void bounce(View v) {
@@ -992,39 +1035,41 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 .start();
     }
 
-    private void onThumbnailClick() {
-        if (finalMediaUri != null) {
-            // Stage 2 (capture frame) or Stage 3 (post-processed): open current session image
-            Log.d(TAG, "Opening current session image: " + finalMediaUri + " stage=" + thumbnailStage);
-            CameraUtils.openLatestPhoto(requireContext(), finalMediaUri);
-        } else if (lastMediaUri != null) {
-            // Stage 1 (preview frame): no current session image yet, open previous session
-            Log.d(TAG, "Opening last saved image: " + lastMediaUri);
-            CameraUtils.openLatestPhoto(requireContext(), lastMediaUri);
-        } else {
-            Log.d(TAG, "Opening gallery");
-            CameraUtils.openGallery(requireContext());
+    private void onThumbnailClicked() {
+        CameraMediaStore.ThumbnailState state = cameraMediaStore.getCurrentState();
+        Log.d(TAG, "Thumbnail clicked: status=" + state.status + " uri=" + state.uri);
+        cameraMediaStore.openCurrentMedia(requireContext());
+    }
+
+    private void renderThumbnailState(CameraMediaStore.ThumbnailState state, boolean animate) {
+        if (state == null || state.bitmap == null || thumbnail == null) return;
+        recycleCurrentThumbnailBitmap(state.bitmap);
+        thumbnail.setImageBitmap(state.bitmap);
+        if (animate) {
+            animateThumbnailUpdate();
         }
     }
 
-    private void updateThumbnail(Bitmap bitmap) {
-        if (bitmap == null || thumbnail == null) return;
+    private Bitmap createThumbnailBitmap(Bitmap bitmap) {
         int size = Math.min(bitmap.getWidth(), bitmap.getHeight());
         int x = (bitmap.getWidth() - size) / 2;
         int y = (bitmap.getHeight() - size) / 2;
         Bitmap cropped = Bitmap.createBitmap(bitmap, x, y, size, size);
         Bitmap thumbBitmap = Bitmap.createScaledBitmap(cropped, 128, 128, true);
         if (cropped != bitmap) cropped.recycle();
+        return thumbBitmap;
+    }
 
-        // Recycle old bitmap to avoid memory accumulation after multiple shots
+    private void recycleCurrentThumbnailBitmap(Bitmap nextBitmap) {
         if (thumbnail.getDrawable() instanceof BitmapDrawable) {
             Bitmap oldBitmap = ((BitmapDrawable) thumbnail.getDrawable()).getBitmap();
-            if (oldBitmap != null && oldBitmap != thumbBitmap && !oldBitmap.isRecycled()) {
+            if (oldBitmap != null && oldBitmap != nextBitmap && !oldBitmap.isRecycled()) {
                 oldBitmap.recycle();
             }
         }
-        thumbnail.setImageBitmap(thumbBitmap);
+    }
 
+    private void animateThumbnailUpdate() {
         thumbnail.animate()
                 .scaleX(0.85f).scaleY(0.85f)
                 .setDuration(90)
@@ -1042,8 +1087,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                     @Override
                     public boolean onSingleTapUp(MotionEvent e) {
                         showFocusRing(e.getX(), e.getY());
-                        if (cameraController != null) {
-                            cameraController.focusOnPoint(
+                        if (cameraEngine != null) {
+                            cameraEngine.focusOnPoint(
                                     e.getX(), e.getY(),
                                     textureView.getWidth(), textureView.getHeight());
                         }
@@ -1055,11 +1100,11 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
                     @Override
                     public boolean onScale(ScaleGestureDetector detector) {
-                        if (cameraController == null) return false;
+                        if (cameraEngine == null) return false;
                         currentZoom *= detector.getScaleFactor();
                         currentZoom = Math.max(1f,
-                                Math.min(currentZoom, cameraController.getMaxZoom()));
-                        cameraController.setZoom(currentZoom);
+                                Math.min(currentZoom, cameraEngine.getMaxZoom()));
+                        cameraEngine.setZoom(currentZoom);
                         zoomLabel.setVisibility(View.VISIBLE);
                         zoomLabel.setText(String.format(Locale.US, "%.1fx", currentZoom));
                         mainHandler.removeCallbacks(hideZoomLabel);
@@ -1090,21 +1135,21 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void setupModeSelector() {
-        modePhoto.setOnClickListener(v -> selectMode(CameraController.MODE_PHOTO));
-        modeVideo.setOnClickListener(v -> selectMode(CameraController.MODE_VIDEO));
+        modePhoto.setOnClickListener(v -> selectMode(CameraEngine.MODE_PHOTO));
+        modeVideo.setOnClickListener(v -> selectMode(CameraEngine.MODE_VIDEO));
     }
 
     private void selectMode(int mode) {
         if (uiMode == mode) return;
-        if (cameraController != null && cameraController.isRecording()) return;
+        if (cameraEngine != null && cameraEngine.isRecording()) return;
         if (isCapturing) return;
 
-        Log.i(TAG, "Mode switch: " + (mode == CameraController.MODE_PHOTO ? "PHOTO" : "VIDEO"));
+        Log.i(TAG, "Mode switch: " + (mode == CameraEngine.MODE_PHOTO ? "PHOTO" : "VIDEO"));
         uiMode = mode;
         updateModeUi();
 
-        if (mode == CameraController.MODE_VIDEO) {
-            faceOverlay.clearFaces();
+        if (mode == CameraEngine.MODE_VIDEO) {
+            cameraOverlay.clearFaces();
             // Request mic early when entering video mode
             if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -1113,15 +1158,15 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
         }
 
         // Rebuild camera session for mode surfaces
-        if (cameraController != null && textureView.isAvailable()) {
-            cameraController.stopCamera();
+        if (cameraEngine != null && textureView.isAvailable()) {
+            cameraEngine.stopCamera();
             startCameraSession();
         }
     }
 
     private void updateModeUi() {
         if (modePhoto == null) return;
-        if (uiMode == CameraController.MODE_PHOTO) {
+        if (uiMode == CameraEngine.MODE_PHOTO) {
             modePhoto.setTextAppearance(R.style.ModeSelectorText_Selected);
             modeVideo.setTextAppearance(R.style.ModeSelectorText);
             btnShutter.setBackgroundResource(R.drawable.selector_shutter);
@@ -1148,8 +1193,8 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
                 modeIndicator.setLayoutParams(lp);
             });
         }
-        if (cameraController != null) {
-            onIsoUpdated(cameraController.getCurrentIso());
+        if (cameraEngine != null) {
+            onIsoUpdated(cameraEngine.getCurrentIso());
         }
     }
 
@@ -1189,24 +1234,26 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     }
 
     private void configureTransform(int viewWidth, int viewHeight) {
-        if (textureView == null || cameraController == null
-                || cameraController.getPreviewSize() == null) return;
+        if (textureView == null || cameraEngine == null
+                || cameraEngine.getPreviewSize() == null) return;
         if (viewWidth == 0 || viewHeight == 0) return;
 
-        Log.d(TAG, "configureTransform: view=" + viewWidth + "x" + viewHeight + " preview=" + cameraController.getPreviewSize());
+        Log.d(TAG, "configureTransform: view=" + viewWidth + "x" + viewHeight + " preview=" + cameraEngine.getPreviewSize());
         int rotation = requireActivity().getWindowManager().getDefaultDisplay().getRotation();
-        Size previewSize = cameraController.getPreviewSize();
+        Size previewSize = cameraEngine.getPreviewSize();
         Matrix matrix = CameraUtils.configureTransform(
                 viewWidth, viewHeight,
                 previewSize.getWidth(), previewSize.getHeight(),
                 rotation,
-                cameraController.getSensorOrientation(),
-                cameraController.isFrontCamera());
+                cameraEngine.getSensorOrientation(),
+                cameraEngine.isFrontCamera(),
+                getTargetAspectRatio());
         textureView.setTransform(matrix);
-        faceOverlay.setCameraInfo(
-                cameraController.getSensorOrientation(),
-                cameraController.isFrontCamera());
-        faceOverlay.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
+        cameraOverlay.setCameraInfo(
+                cameraEngine.getSensorOrientation(),
+                cameraEngine.isFrontCamera());
+        cameraOverlay.setTargetAspectRatio(getTargetAspectRatio());
+        cameraOverlay.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
     }
 
     private void showError(String msg) {
@@ -1234,11 +1281,11 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
     @Override
     public void onPause() {
         Log.d(TAG, "onPause");
-        if (cameraController != null) {
-            if (cameraController.isRecording()) {
-                cameraController.stopRecording();
+        if (cameraEngine != null) {
+            if (cameraEngine.isRecording()) {
+                cameraEngine.stopRecording();
             }
-            cameraController.stopCamera();
+            cameraEngine.stopCamera();
         }
         mainHandler.removeCallbacks(recordingTick);
         super.onPause();
@@ -1299,7 +1346,7 @@ public class CameraFragment extends Fragment implements CameraController.CameraC
             return;
         }
 
-        if (uiMode == CameraController.MODE_VIDEO && !audioOk) {
+        if (uiMode == CameraEngine.MODE_VIDEO && !audioOk) {
             showError(getString(R.string.permission_mic_rationale));
             // Stay in video UI but cannot record until granted; still open camera preview
         }
