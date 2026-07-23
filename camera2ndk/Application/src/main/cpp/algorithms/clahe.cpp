@@ -1,8 +1,17 @@
+/**
+ * CLAHE contrast enhancement implementation.
+ *
+ * This file applies contrast limited adaptive histogram equalization on the
+ * luminance channel to improve local detail while limiting noise amplification.
+ */
 #include "clahe.h"
-#include <opencv2/imgproc.hpp>
+#include "../core/opencv2/imgproc.hpp"
 
 namespace camera_engine {
 
+/**
+ * Enhances local luminance contrast with CLAHE while preserving color channels.
+ */
 cv::Mat ClaheEnhancer::apply(const cv::Mat& bgr, float clipLimit, int tileGridSize) {
     if (bgr.empty()) return bgr;
 

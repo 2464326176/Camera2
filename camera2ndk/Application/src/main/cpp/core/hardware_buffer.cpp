@@ -1,3 +1,9 @@
+/**
+ * Android HardwareBuffer wrapper implementation.
+ *
+ * This file manages native hardware buffer lifetime and safe CPU-side locking
+ * for image processing paths that consume Android camera buffers.
+ */
 #include "hardware_buffer.h"
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
@@ -22,6 +28,9 @@ HardwareBufferRef::~HardwareBufferRef() {
     unlock();
 }
 
+/**
+ * Locks an Android HardwareBuffer and records width, height, stride, and plane pointers.
+ */
 bool HardwareBufferRef::lock(AHardwareBuffer* buffer, uint64_t usage) {
     if (!isApi26OrAbove()) {
         LOGE("AHardwareBuffer not available on API < 26");
@@ -67,6 +76,9 @@ bool HardwareBufferRef::lock(AHardwareBuffer* buffer, uint64_t usage) {
     return true;
 }
 
+/**
+ * Unlocks the HardwareBuffer and clears cached CPU-side plane references.
+ */
 void HardwareBufferRef::unlock() {
     if (m_locked && m_buffer) {
         if (isApi26OrAbove()) {

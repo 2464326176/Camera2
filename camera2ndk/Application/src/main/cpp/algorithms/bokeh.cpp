@@ -1,5 +1,11 @@
+/**
+ * Portrait bokeh processing implementation.
+ *
+ * This file builds a face mask, blurs the background, and composites the result
+ * to simulate shallow depth-of-field for portrait images.
+ */
 #include "bokeh.h"
-#include <opencv2/imgproc.hpp>
+#include "../core/opencv2/imgproc.hpp"
 #include <android/log.h>
 #include <algorithm>
 

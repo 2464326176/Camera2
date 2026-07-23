@@ -1,3 +1,9 @@
+/**
+ * Face detection implementation.
+ *
+ * This file wraps OpenCV Haar cascade detection and converts detected face
+ * rectangles into camera engine metadata structures.
+ */
 #include "face_detect.h"
 #include <android/log.h>
 
@@ -9,6 +15,9 @@ namespace camera_engine {
 
 FaceDetector::~FaceDetector() { release(); }
 
+/**
+ * Creates and configures the OpenCV face detector from the supplied model path.
+ */
 bool FaceDetector::init(const std::string& modelPath) {
     std::lock_guard<std::mutex> lock(m_mutex);
     try {
@@ -36,6 +45,9 @@ void FaceDetector::release() {
     m_ready = false;
 }
 
+/**
+ * Detects faces on the smaller input image and rescales rectangles to original frame size.
+ */
 std::vector<FaceRect> FaceDetector::detect(const cv::Mat& bgrSmall, int origWidth, int origHeight) {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<FaceRect> faces;

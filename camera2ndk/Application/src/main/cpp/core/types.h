@@ -1,3 +1,9 @@
+/**
+ * Shared camera engine type definitions.
+ *
+ * This header defines lightweight enums and geometry structures used across
+ * frame processing, algorithms, encoding, and JNI boundaries.
+ */
 #pragma once
 #include <cstdint>
 #include <string>

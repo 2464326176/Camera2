@@ -1,3 +1,9 @@
+/**
+ * Camera frame metadata model.
+ *
+ * This header stores per-frame capture information such as timestamp, exposure,
+ * sensitivity, orientation, and focus distance for downstream processing stages.
+ */
 #pragma once
 #include <cstdint>
 

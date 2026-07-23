@@ -1,8 +1,17 @@
+/**
+ * Saturation adjustment implementation.
+ *
+ * This file adjusts the HSV saturation channel and converts the result back to
+ * BGR for downstream processing or display.
+ */
 #include "saturation.h"
-#include <opencv2/imgproc.hpp>
+#include "../core/opencv2/imgproc.hpp"
 
 namespace camera_engine {
 
+/**
+ * Scales the HSV saturation channel to make colors stronger or more subdued.
+ */
 cv::Mat SaturationAdjuster::adjust(const cv::Mat& bgr, float factor) {
     if (bgr.empty()) return bgr;
 

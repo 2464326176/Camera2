@@ -1,5 +1,11 @@
+/**
+ * HDR tone adjustment interface.
+ *
+ * This header declares a lightweight local contrast enhancer used to improve
+ * perceived dynamic range in a single BGR frame.
+ */
 #pragma once
-#include <opencv2/core.hpp>
+#include "../core/opencv2/core.hpp"
 
 namespace camera_engine {
 

@@ -1,3 +1,9 @@
+/**
+ * Still capture processing pipeline implementation.
+ *
+ * This file applies quality-oriented image enhancement stages and optional JPEG
+ * encoding for final photo capture output.
+ */
 #include "capture_pipeline.h"
 #include <android/log.h>
 
@@ -7,6 +13,9 @@
 
 namespace camera_engine {
 
+/**
+ * Stores capture configuration for the next still-image processing request.
+ */
 ResultCode CapturePipeline::configure(const PipelineConfig& config) {
     m_config = config;
     return ResultCode::OK;
@@ -25,6 +34,9 @@ void CapturePipeline::setAlgorithmParam(AlgorithmId id, const std::string& key, 
     }
 }
 
+/**
+ * Converts capture frames to BGR, applies enabled quality algorithms, and encodes JPEG output.
+ */
 CaptureResult CapturePipeline::process(const std::vector<YuvFrame>& frames) {
     CaptureResult result;
     if (frames.empty()) return result;

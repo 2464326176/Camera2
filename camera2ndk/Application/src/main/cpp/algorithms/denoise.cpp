@@ -1,7 +1,13 @@
+/**
+ * Image denoising implementations.
+ *
+ * This file provides bilateral, non-local means, and adaptive denoising methods
+ * that can be selected according to quality and performance requirements.
+ */
 #include "denoise.h"
-#include <opencv2/imgproc.hpp>
-#include <opencv2/photo.hpp>
-#include <opencv2/video.hpp>
+#include "../core/opencv2/imgproc.hpp"
+#include "../core/opencv2/photo.hpp"
+#include "../core/opencv2/video.hpp"
 #include <android/log.h>
 #include <cmath>
 #include <algorithm>
@@ -13,6 +19,9 @@
 
 namespace camera_engine {
 
+/**
+ * Chooses denoising strength from ISO so high-gain frames receive stronger cleanup.
+ */
 int Denoiser::chooseDenoiseStrength(int iso) {
     if (iso < ISO_L1) return 1;
     if (iso < ISO_L2) return 2;
@@ -21,6 +30,9 @@ int Denoiser::chooseDenoiseStrength(int iso) {
     return 5;
 }
 
+/**
+ * Converts BGR image data into NV21 layout for Android-compatible denoising helpers.
+ */
 void Denoiser::bgrToNv21(const cv::Mat& bgr, unsigned char* out, int width, int height) {
     int alignedWidth = (width + 1) & ~1;
     int alignedHeight = (height + 1) & ~1;
@@ -47,6 +59,9 @@ void Denoiser::bgrToNv21(const cv::Mat& bgr, unsigned char* out, int width, int 
     }
 }
 
+/**
+ * Runs single-frame denoising with algorithm settings selected by ISO.
+ */
 cv::Mat Denoiser::denoiseSingle(const cv::Mat& bgr, int iso) {
     if (bgr.empty()) return cv::Mat();
 
@@ -77,6 +92,9 @@ cv::Mat Denoiser::denoiseSingle(const cv::Mat& bgr, int iso) {
     return denoised;
 }
 
+/**
+ * Aligns multiple frames and averages them before final denoising to reduce temporal noise.
+ */
 cv::Mat Denoiser::denoiseMulti(const std::vector<cv::Mat>& bgrFrames, int iso) {
     if (bgrFrames.empty()) return cv::Mat();
     if (bgrFrames.size() == 1) return denoiseSingle(bgrFrames[0], iso);

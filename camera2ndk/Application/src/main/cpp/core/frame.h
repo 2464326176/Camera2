@@ -1,18 +1,29 @@
+/**
+ * Camera frame container abstraction.
+ *
+ * This header defines the Frame object used to carry image buffers, dimensions,
+ * pixel format, and capture metadata through the native processing pipeline.
+ */
 #pragma once
 #include "hardware_buffer.h"
 #include "metadata.h"
 #include "types.h"
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
+#include "opencv2/core.hpp"
+#include "opencv2/imgproc.hpp"
 #include <memory>
 
 namespace camera_engine {
 
+/**
+ * Lightweight YUV frame object passed between native camera modules.
+ */
 class YuvFrame {
 public:
     YuvFrame() = default;
 
-    // Construct from HardwareBuffer (zero-copy)
+    /**
+     * Wraps a locked HardwareBuffer without copying the underlying image data.
+     */
     YuvFrame(std::shared_ptr<HardwareBufferRef> hwBuf,
              const FrameMetadata& meta,
              YuvFormat fmt = YuvFormat::NV21);
@@ -30,9 +41,15 @@ public:
     const FrameMetadata& getMetadata() const { return m_metadata; }
 
     // YUV to BGR conversion (called on demand, incurs one copy)
+    /**
+     * Converts the YUV frame into a full-resolution BGR Mat for OpenCV algorithms.
+     */
     cv::Mat toBgr() const;
 
     // YUV to downscaled BGR (for face detection, saves memory)
+    /**
+     * Converts the frame to BGR and downscales it so the longest side is maxSide.
+     */
     cv::Mat toBgrDownscaled(int maxSide) const;
 
     const HardwareBufferRef* getBuffer() const { return m_buffer.get(); }

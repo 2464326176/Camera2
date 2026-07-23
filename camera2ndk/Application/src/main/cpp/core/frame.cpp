@@ -1,3 +1,9 @@
+/**
+ * Camera frame container implementation.
+ *
+ * This file owns frame buffer allocation, wrapping of existing image memory,
+ * metadata updates, and OpenCV Mat view conversion for native algorithms.
+ */
 #include "frame.h"
 #include <android/log.h>
 #include <cstring>
@@ -29,6 +35,9 @@ const uint8_t* YuvFrame::getUvRow(int row) const {
     return m_buffer->uPlane.data + row * m_buffer->uPlane.rowStride;
 }
 
+/**
+ * Converts NV21-style YUV data into a BGR Mat for OpenCV processing.
+ */
 cv::Mat YuvFrame::toBgr() const {
     if (!isValid()) return cv::Mat();
 
@@ -56,6 +65,9 @@ cv::Mat YuvFrame::toBgr() const {
     return bgr.clone(); // Return independent copy, free nv21 temp buffer
 }
 
+/**
+ * Produces a BGR preview copy scaled down for lightweight algorithms.
+ */
 cv::Mat YuvFrame::toBgrDownscaled(int maxSide) const {
     if (!isValid()) return cv::Mat();
 

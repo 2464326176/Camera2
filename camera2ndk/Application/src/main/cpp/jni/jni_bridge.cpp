@@ -1,3 +1,9 @@
+/**
+ * JNI bridge for the native camera engine.
+ *
+ * This file exposes native pipeline creation, configuration, frame processing,
+ * JPEG encoding, and HardwareBuffer utilities to the Android Java/Kotlin layer.
+ */
 #include <jni.h>
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
@@ -37,6 +43,9 @@ static jlong g_nextPipelineId = 1;
 
 // ─── Helper functions ───
 
+/**
+ * Converts the Java CaptureMetadata object into the native metadata structure.
+ */
 static FrameMetadata parseMetadata(JNIEnv* env, jobject metaObj) {
     FrameMetadata meta;
     if (!metaObj) return meta;
@@ -54,6 +63,9 @@ static FrameMetadata parseMetadata(JNIEnv* env, jobject metaObj) {
     return meta;
 }
 
+/**
+ * Converts a Java HardwareBuffer object to AHardwareBuffer and locks it for CPU reads.
+ */
 static std::shared_ptr<HardwareBufferRef> lockHardwareBuffer(JNIEnv* env, jobject hwBuffer) {
     if (!hwBuffer) return nullptr;
     AHardwareBuffer* ahwb = AHardwareBuffer_fromHardwareBuffer(env, hwBuffer);
@@ -64,6 +76,9 @@ static std::shared_ptr<HardwareBufferRef> lockHardwareBuffer(JNIEnv* env, jobjec
     return ref;
 }
 
+/**
+ * Packs native face rectangles and landmarks into a flat Java float array.
+ */
 static jfloatArray facesToJni(JNIEnv* env, const std::vector<FaceRect>& faces) {
     if (faces.empty()) return env->NewFloatArray(0);
 
@@ -88,6 +103,9 @@ static jfloatArray facesToJni(JNIEnv* env, const std::vector<FaceRect>& faces) {
     return arr;
 }
 
+/**
+ * Copies a native JPEG byte vector into a Java byte array.
+ */
 static jbyteArray jpegToJni(JNIEnv* env, const std::vector<uint8_t>& data) {
     if (data.empty()) return nullptr;
     jbyteArray arr = env->NewByteArray((jsize)data.size());
@@ -98,6 +116,9 @@ static jbyteArray jpegToJni(JNIEnv* env, const std::vector<uint8_t>& data) {
 
 // ==================== Engine lifecycle ====================
 
+/**
+ * Creates a native engine context and returns an opaque handle to Java.
+ */
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_opencv_camera_NativeEngine_nativeCreateEngine(
         JNIEnv* env, jclass /* clazz */, jstring modelDir) {
@@ -114,6 +135,9 @@ Java_com_opencv_camera_NativeEngine_nativeCreateEngine(
     return id;
 }
 
+/**
+ * Destroys the native engine context and all pipelines associated with it.
+ */
 extern "C" JNIEXPORT void JNICALL
 Java_com_opencv_camera_NativeEngine_nativeDestroyEngine(
         JNIEnv* /* env */, jclass /* clazz */, jlong engineHandle) {
@@ -137,6 +161,9 @@ Java_com_opencv_camera_NativeEngine_nativeDestroyEngine(
 
 // ==================== Pipeline creation ====================
 
+/**
+ * Creates and configures a preview pipeline for real-time frame processing.
+ */
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_opencv_camera_NativeEngine_nativeCreatePreviewPipeline(
         JNIEnv* env, jclass /* clazz */, jlong engineHandle,
@@ -170,6 +197,9 @@ Java_com_opencv_camera_NativeEngine_nativeCreatePreviewPipeline(
     return id;
 }
 
+/**
+ * Creates and configures a still-capture pipeline for high-quality processing.
+ */
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_opencv_camera_NativeEngine_nativeCreateCapturePipeline(
         JNIEnv* /* env */, jclass /* clazz */, jlong engineHandle,
@@ -198,6 +228,9 @@ Java_com_opencv_camera_NativeEngine_nativeCreateCapturePipeline(
     return id;
 }
 
+/**
+ * Releases a native pipeline handle created for preview or capture.
+ */
 extern "C" JNIEXPORT void JNICALL
 Java_com_opencv_camera_NativeEngine_nativeDestroyPipeline(
         JNIEnv* /* env */, jclass /* clazz */, jlong /* engineHandle */, jlong pipelineHandle) {
@@ -209,6 +242,9 @@ Java_com_opencv_camera_NativeEngine_nativeDestroyPipeline(
 
 // ==================== Frame processing ====================
 
+/**
+ * Processes one preview HardwareBuffer and returns detected face data to Java.
+ */
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_opencv_camera_NativeEngine_nativeProcessPreviewFrame(
         JNIEnv* env, jclass /* clazz */, jlong pipelineHandle,
@@ -246,6 +282,9 @@ Java_com_opencv_camera_NativeEngine_nativeProcessPreviewFrame(
     return facesToJni(env, result.faces);
 }
 
+/**
+ * Processes one or more capture HardwareBuffers and returns encoded JPEG bytes.
+ */
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_opencv_camera_NativeEngine_nativeProcessCapture(
         JNIEnv* env, jclass /* clazz */, jlong pipelineHandle,
@@ -304,6 +343,9 @@ Java_com_opencv_camera_NativeEngine_nativeProcessCapture(
 
 // ==================== Algorithm control ====================
 
+/**
+ * Toggles an algorithm on the selected native pipeline.
+ */
 extern "C" JNIEXPORT void JNICALL
 Java_com_opencv_camera_NativeEngine_nativeEnableAlgorithm(
         JNIEnv* /* env */, jclass /* clazz */, jlong pipelineHandle,
@@ -316,6 +358,9 @@ Java_com_opencv_camera_NativeEngine_nativeEnableAlgorithm(
     }
 }
 
+/**
+ * Updates one floating-point algorithm parameter from Java.
+ */
 extern "C" JNIEXPORT void JNICALL
 Java_com_opencv_camera_NativeEngine_nativeSetAlgorithmParam(
         JNIEnv* env, jclass /* clazz */, jlong pipelineHandle,

@@ -1,3 +1,9 @@
+/**
+ * Still capture processing pipeline interface.
+ *
+ * This header declares the higher-quality pipeline used for captured photos,
+ * where more expensive processing can be applied than in preview.
+ */
 #pragma once
 #include "pipeline_base.h"
 #include "../core/frame.h"
@@ -9,14 +15,21 @@
 
 namespace camera_engine {
 
+/**
+ * Quality-oriented processing pipeline used for still photo capture.
+ */
 class CapturePipeline : public PipelineBase {
 public:
     CapturePipeline() = default;
 
+    /** Applies still-capture configuration and quality options. */
     ResultCode configure(const PipelineConfig& config) override;
+    /** Enables or disables a capture-stage algorithm. */
     void enableAlgorithm(AlgorithmId id, bool enable) override;
+    /** Updates a capture algorithm parameter at runtime. */
     void setAlgorithmParam(AlgorithmId id, const std::string& key, float value) override;
 
+    /** Processes one or more still-capture frames and returns image/JPEG output. */
     CaptureResult process(const std::vector<YuvFrame>& frames);
 
 private:

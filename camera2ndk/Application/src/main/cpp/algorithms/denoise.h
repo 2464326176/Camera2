@@ -1,18 +1,36 @@
+/**
+ * Image denoising interfaces.
+ *
+ * This header declares multiple denoising strategies and tunable parameters for
+ * reducing sensor noise in preview and still capture processing paths.
+ */
 #pragma once
-#include <opencv2/core.hpp>
+#include "../core/opencv2/core.hpp"
 #include <vector>
 
 namespace camera_engine {
 
+/**
+ * Collection of denoising routines tuned for different capture conditions.
+ */
 class Denoiser {
 public:
     // Single-frame denoise: BGR input -> BGR output
+    /**
+     * Denoises one BGR frame using an ISO-dependent algorithm selection.
+     */
     static cv::Mat denoiseSingle(const cv::Mat& bgr, int iso);
 
     // Multi-frame denoise: BGR frames -> ECC alignment + weighted average + NLM refinement -> BGR output
+    /**
+     * Aligns and merges multiple BGR frames to reduce temporal noise.
+     */
     static cv::Mat denoiseMulti(const std::vector<cv::Mat>& bgrFrames, int iso);
 
 private:
+    /**
+     * Maps sensor ISO to a coarse denoising strength level.
+     */
     static int chooseDenoiseStrength(int iso);
     static void bgrToNv21(const cv::Mat& bgr, unsigned char* out, int width, int height);
 

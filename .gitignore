@@ -99,7 +99,7 @@ Thumbs.db
 # 测试报告
 test-output/
 junit/
-
+smoke-test
 .mimocode
 .trae
 .vscode

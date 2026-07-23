@@ -1,5 +1,11 @@
+/**
+ * CLAHE contrast enhancement interface.
+ *
+ * This header declares an adaptive histogram equalization helper for improving
+ * local contrast in camera frames.
+ */
 #pragma once
-#include <opencv2/core.hpp>
+#include "../core/opencv2/core.hpp"
 
 namespace camera_engine {
 

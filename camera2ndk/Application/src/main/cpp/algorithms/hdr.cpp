@@ -1,9 +1,18 @@
+/**
+ * HDR tone adjustment implementation.
+ *
+ * This file applies local contrast enhancement in Lab color space to improve
+ * shadow and highlight separation without changing image dimensions.
+ */
 #include "hdr.h"
-#include <opencv2/imgproc.hpp>
-#include <opencv2/photo.hpp>
+#include "../core/opencv2/imgproc.hpp"
+#include "../core/opencv2/photo.hpp"
 
 namespace camera_engine {
 
+/**
+ * Applies gamma correction and weighted blending to create a lightweight HDR-style image.
+ */
 cv::Mat HdrToneMap::apply(const cv::Mat& bgr, float gamma, float intensity) {
     if (bgr.empty()) return bgr;
 

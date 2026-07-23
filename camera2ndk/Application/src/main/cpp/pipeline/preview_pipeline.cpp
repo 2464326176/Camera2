@@ -1,3 +1,9 @@
+/**
+ * Preview processing pipeline implementation.
+ *
+ * This file coordinates face detection and real-time image enhancement steps
+ * that must remain lightweight enough for interactive camera preview.
+ */
 #include "preview_pipeline.h"
 #include <android/log.h>
 
@@ -7,6 +13,9 @@
 
 namespace camera_engine {
 
+/**
+ * Stores preview configuration under lock so runtime calls remain thread-safe.
+ */
 ResultCode PreviewPipeline::configure(const PipelineConfig& config) {
     m_config = config;
     m_lastDetectTime = std::chrono::steady_clock::now();
@@ -25,6 +34,9 @@ void PreviewPipeline::setAlgorithmParam(AlgorithmId id, const std::string& key, 
     }
 }
 
+/**
+ * Loads the face model used by the preview pipeline.
+ */
 bool PreviewPipeline::initFaceDetector(const std::string& modelPath) {
     return m_faceDetector.init(modelPath);
 }
@@ -33,6 +45,9 @@ void PreviewPipeline::releaseFaceDetector() {
     m_faceDetector.release();
 }
 
+/**
+ * Converts the input frame, optionally detects faces at interval, and returns preview output.
+ */
 PreviewResult PreviewPipeline::process(const YuvFrame& frame) {
     PreviewResult result;
     result.timestampNs = frame.getMetadata().timestampNs;
