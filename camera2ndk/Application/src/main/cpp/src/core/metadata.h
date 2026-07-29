@@ -18,6 +18,12 @@ struct FrameMetadata {
     int32_t aeState = 0;
     int32_t afState = 0;
     int32_t awbState = 0;
+    float focalLength = 0.0f;
+    float focusDistance = 0.0f;
+    int32_t rotation = 0;
+    int32_t lensFacing = 0;
+    uint32_t frameNumber = 0;
+    bool approximate = false;
 };
 
 } // namespace camera_engine

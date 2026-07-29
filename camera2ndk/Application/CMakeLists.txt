@@ -37,6 +37,8 @@ set(API_SOURCES
 
 set(CORE_SOURCES
     ${CPP_DIR}/src/core/frame.cpp
+    ${CPP_DIR}/src/algorithm/algorithm_manager.cpp
+    ${CPP_DIR}/src/decision/decision.cpp
 )
 
 set(PLATFORM_ANDROID_SOURCES

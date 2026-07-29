@@ -42,6 +42,7 @@ apply plugin: 'com.android.application'
 // android.enableJetifier=true
 // 这样可以自动迁移到 AndroidX，避免后续兼容性问题。
 dependencies {
+    implementation project(':camera-engine')
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.legacy:legacy-support-v13:1.0.0'
     implementation 'androidx.core:core:1.13.0'
@@ -73,25 +74,8 @@ android {
         minSdkVersion 21
         targetSdkVersion 34
 
-        // 1. 添加 NDK 配置
-        externalNativeBuild {
-            cmake {
-                cppFlags "-std=c++17"
-                // 2. 定义 CMake 变量：从 local.properties 读取 opencv.dir 路径
-                arguments "-DOPENCV_SDK_PATH=${localProperties.getProperty('opencv.dir', project.file('..').absolutePath)}"
-            }
-        }
     }
 
-
-    // 3. 指定 CMakeLists.txt 的位置
-    externalNativeBuild {
-        cmake {
-            path "CMakeLists.txt"
-        }
-    }
-
-    // 4. 指定 .so 库的存放目录（等会要拷贝 OpenCV 的 so 进去）
     // 设置 Java 11 以支持 lambda 等 Java 8+ 特性
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
@@ -100,6 +84,9 @@ android {
 
     sourceSets {
         main {
+            // Host app keeps OpenCV (and optional prebuilt) .so under jniLibs.
+            // Native camera_engine is built by :camera-engine when cpp exists,
+            // or loaded from :camera-engine/src/main/jniLibs in split-repo mode.
             jniLibs.srcDirs = ['src/main/jniLibs']
             dirs.each { dir ->
                 java.srcDirs "src/${dir}/java"

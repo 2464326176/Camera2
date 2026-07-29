@@ -1,0 +1,60 @@
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+
+apply plugin: 'com.android.library'
+
+// Monorepo: cpp sources live under Application/src/main/cpp.
+// Split-repo mode: cpp is absent and prebuilt .so files are under jniLibs
+// (produced by Application/src/main/cpp/build-ndk.bat or CI).
+def nativeCmake = file("${rootProject.projectDir}/Application/CMakeLists.txt")
+def nativeSrcRoot = file("${rootProject.projectDir}/Application/src/main/cpp")
+def hasNativeSources = nativeCmake.exists() &&
+        !fileTree(dir: nativeSrcRoot, include: ['**/*.cpp']).isEmpty()
+
+if (hasNativeSources) {
+    println("[camera-engine] Native sources found → building with CMake")
+} else {
+    println("[camera-engine] No native sources → using prebuilt jniLibs")
+}
+
+android {
+    namespace 'com.opencv.camera.engine'
+    compileSdkVersion 34
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 34
+
+        if (hasNativeSources) {
+            externalNativeBuild {
+                cmake {
+                    cppFlags "-std=c++17"
+                    arguments "-DOPENCV_SDK_PATH=${localProperties.getProperty('opencv.dir', project.file('..').absolutePath)}"
+                }
+            }
+        }
+    }
+
+    if (hasNativeSources) {
+        externalNativeBuild {
+            cmake {
+                path "../Application/CMakeLists.txt"
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            // Always keep jniLibs available for opencv / prebuilt camera_engine.
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}

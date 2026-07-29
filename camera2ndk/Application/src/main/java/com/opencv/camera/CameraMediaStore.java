@@ -134,8 +134,18 @@ final class CameraMediaStore {
     }
 
     ThumbnailState setVideoSaved(Uri uri, Bitmap bitmap) {
+        if (currentState != null
+                && (currentState.status == ThumbnailStatus.CAPTURING
+                    || currentState.status == ThumbnailStatus.TEMPORARY)) {
+            // A photo capture is still in flight. Do not clobber its thumbnail
+            // lifecycle; keep the photo flow authoritative and remember the
+            // video uri so it stays discoverable through the gallery.
+            if (uri != null) currentMediaUri = uri;
+            return currentState;
+        }
         currentMediaUri = uri;
-        currentState = ThumbnailState.ready(0L, bitmap, uri, MIME_VIDEO);
+        long videoId = nextCaptureId++;
+        currentState = ThumbnailState.ready(videoId, bitmap, uri, MIME_VIDEO);
         return currentState;
     }
 
@@ -354,7 +364,10 @@ final class CameraMediaStore {
             }
             context.getContentResolver().update(uri, values, null, null);
         } else {
-            MediaScannerConnection.scanFile(context, new String[]{uri.getPath()}, null, null);
+            // Pre-Q: MediaStore entries are real files, but passing a content
+            // uri's getPath() yields a non-file path. Use the uri string so the
+            // scanner resolves the underlying file correctly.
+            MediaScannerConnection.scanFile(context, new String[]{uri.toString()}, null, null);
         }
     }
 

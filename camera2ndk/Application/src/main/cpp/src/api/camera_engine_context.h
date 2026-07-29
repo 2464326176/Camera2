@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "src/pipeline/capture_pipeline.h"
@@ -11,4 +12,6 @@ struct CameraEngineContext {
     std::string cacheDir;
     std::unique_ptr<camera_engine::PreviewPipeline> previewPipeline;
     std::unique_ptr<camera_engine::CapturePipeline> capturePipeline;
+    camera_engine::SessionControl sessionControl;
+    std::mutex mutex;
 };

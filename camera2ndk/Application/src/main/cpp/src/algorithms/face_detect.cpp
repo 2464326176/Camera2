@@ -70,8 +70,11 @@ std::vector<FaceRect> FaceDetector::detect(const cv::Mat& bgrSmall, int origWidt
             f.w = facesMat.at<float>(i, 2) * scaleX;
             f.h = facesMat.at<float>(i, 3) * scaleY;
             // right eye, left eye, nose tip, right mouth corner, left mouth corner
-            for (int j = 0; j < 10; j++) {
-                f.landmarks[j] = facesMat.at<float>(i, 4 + j);
+            // Landmarks are detected on the downscaled image and must be
+            // rescaled back to the original resolution together with the rect.
+            for (int j = 0; j < 10; j += 2) {
+                f.landmarks[j] = facesMat.at<float>(i, 4 + j) * scaleX;
+                f.landmarks[j + 1] = facesMat.at<float>(i, 4 + j + 1) * scaleY;
             }
             // confidence
             if (facesMat.cols > 14) {

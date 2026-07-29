@@ -71,7 +71,6 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
 
     private static final String TAG = "CameraFragment";
     private static final int REQUEST_PERMISSIONS = 100;
-    private static final long FACE_DETECT_INTERVAL_MS = 180;
 
     public static CameraFragment newInstance() {
         return new CameraFragment();
@@ -110,6 +109,12 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService processExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean faceBusy = new AtomicBoolean(false);
+    private final Runnable faceBusyTimeout = () -> {
+        if (faceBusy.get()) {
+            Log.w(TAG, "faceBusy timeout, force reset");
+            faceBusy.set(false);
+        }
+    };
     private MediaActionSound shutterSound;
 
     private static final int ASPECT_FULL = 0;
@@ -129,15 +134,12 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private final CameraMediaStore cameraMediaStore = new CameraMediaStore();
     private long activePhotoCaptureId = 0L;
 
-    // NativeEngine handles
-    private long mEngineHandle = 0;
-    private long mPreviewPipeline = 0;
-    private long mCapturePipeline = 0;
+    // Stable Java facade; all algorithm decisions and processing live in C++.
+    private volatile CameraAlgoSdk cameraAlgoSdk;
 
     private int topBarPadL, topBarPadT, topBarPadR, topBarPadB;
     private int bottomBarPadL, bottomBarPadT, bottomBarPadR, bottomBarPadB;
 
-    private long lastFaceDetectTime = 0;
     private float currentZoom = 1.0f;
     private long recordingStartElapsed = 0;
     private final Runnable recordingTick = new Runnable() {
@@ -175,7 +177,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         applyWindowInsets(view);
         applyPreferences();
         initCamera();
-        initNativeEngine();
+        initAlgorithmSdk();
         setupGestureDetectors();
         setupModeSelector();
         updateModeUi();
@@ -276,9 +278,9 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
             cameraOverlay.clearFaces();
         }
         if (cameraEngine != null) {
-            cameraEngine.setFaceDetectEnabled(faceDetectEnabled);
             cameraEngine.setFlashMode(flashMode);
         }
+        scheduleSessionControlUpdate();
     }
 
     private void initCamera() {
@@ -310,17 +312,50 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         });
     }
 
-    private void initNativeEngine() {
+    private void initAlgorithmSdk() {
         processExecutor.execute(() -> {
-            String modelDir = requireContext().getApplicationContext().getFilesDir().getAbsolutePath();
-            mEngineHandle = NativeEngine.getInstance().nativeCreateEngine(modelDir);
-            mPreviewPipeline = NativeEngine.getInstance().nativeCreatePreviewPipeline(
-                    mEngineHandle, 1280, 720, NativeEngine.FORMAT_NV21, 10);
-            mCapturePipeline = NativeEngine.getInstance().nativeCreateCapturePipeline(
-                    mEngineHandle, 1280, 720, NativeEngine.FORMAT_NV21);
-            Log.i(TAG, "Native engine initialized: engine=" + mEngineHandle
-                    + " preview=" + mPreviewPipeline + " capture=" + mCapturePipeline);
+            try {
+                String modelDir = ModelAssets.ensureModelDir(requireContext());
+                cameraAlgoSdk = CameraAlgoSdk.create(modelDir);
+                pushSessionControl();
+                Log.i(TAG, "Native algorithm engine created, modelDir=" + modelDir);
+            } catch (Exception e) {
+                Log.e(TAG, "Native algorithm engine initialization failed", e);
+            }
         });
+    }
+
+    private SessionControl buildSessionControl() {
+        SessionControl control = new SessionControl();
+        control.mode = uiMode == CameraEngine.MODE_VIDEO
+                ? SessionControl.MODE_VIDEO : SessionControl.MODE_PHOTO;
+        control.lensFacing = cameraEngine != null && cameraEngine.isFrontCamera() ? 2 : 1;
+        control.flashMode = flashMode;
+        control.preferFaceDetect = faceDetectEnabled;
+        control.preferDenoise = true;
+        control.preferSharpen = true;
+        control.preferHdr = isAiEnabled;
+        control.preferClahe = isAiEnabled;
+        control.preferSaturation = isAiEnabled;
+        control.preferBokeh = false;
+        control.jpegQuality = 95;
+        control.analysisMaxSide = 320;
+        return control;
+    }
+
+    private void pushSessionControl() {
+        CameraAlgoSdk sdk = cameraAlgoSdk;
+        if (sdk == null) return;
+        try {
+            sdk.updateSessionControl(buildSessionControl());
+        } catch (IllegalStateException e) {
+            Log.w(TAG, "Native engine is not ready for session control", e);
+        }
+    }
+
+    private void scheduleSessionControlUpdate() {
+        if (processExecutor.isShutdown()) return;
+        processExecutor.execute(this::pushSessionControl);
     }
 
     private void openCameraWithPermission() {
@@ -354,7 +389,8 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                 ? CameraEngine.MODE_VIDEO
                 : CameraEngine.MODE_PHOTO);
         cameraEngine.setFlashMode(flashMode);
-        cameraEngine.setFaceDetectEnabled(faceDetectEnabled);
+        cameraEngine.setFaceDetectEnabled(false);
+        scheduleSessionControlUpdate();
         cameraEngine.startCamera();
         if (textureView.isAvailable()) {
             cameraEngine.createPreviewSession(textureView.getSurfaceTexture());
@@ -366,6 +402,24 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     @Override
     public void onCameraOpened(Size previewSize) {
         Log.i(TAG, "Camera opened, preview=" + previewSize);
+        Size captureSize = cameraEngine != null ? cameraEngine.getCaptureSize() : null;
+        processExecutor.execute(() -> {
+            CameraAlgoSdk sdk = cameraAlgoSdk;
+            if (sdk == null || previewSize == null || captureSize == null) return;
+            try {
+                sdk.configurePreview(
+                        previewSize.getWidth(), previewSize.getHeight(),
+                        CameraAlgoSdk.FORMAT_YUV_420_888, 10);
+                sdk.configureCapture(
+                        captureSize.getWidth(), captureSize.getHeight(),
+                        CameraAlgoSdk.FORMAT_YUV_420_888);
+                sdk.updateSessionControl(buildSessionControl());
+                Log.i(TAG, "Native pipelines configured: preview=" + previewSize
+                        + " capture=" + captureSize);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to configure native pipelines", e);
+            }
+        });
         mainHandler.post(() -> {
             if (!isAdded() || previewSize == null) return;
             // Keep TextureView filling parent; transform applies aspect-preserving center crop.
@@ -414,12 +468,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     public void onIsoUpdated(int iso) {
         mainHandler.post(() -> {
             if (isoLabel == null) return;
-            if (uiMode == CameraEngine.MODE_PHOTO) {
-                int frames = cameraEngine.frameCountForIso(iso);
-                isoLabel.setText(String.format(Locale.US, "ISO %d · %df", iso, frames));
-            } else {
-                isoLabel.setText(String.format(Locale.US, "ISO %d", iso));
-            }
+            isoLabel.setText(String.format(Locale.US, "ISO %d", iso));
         });
     }
 
@@ -474,29 +523,23 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
 
     private final ImageReader.OnImageAvailableListener previewImageListener = reader -> {
         Image image = null;
+        boolean faceAcquired = false;
         try {
             image = reader.acquireLatestImage();
             if (image == null) return;
 
-            if (uiMode != CameraEngine.MODE_PHOTO || !faceDetectEnabled) {
-                return;
-            }
-
-            long now = System.currentTimeMillis();
-            if (now - lastFaceDetectTime < FACE_DETECT_INTERVAL_MS) {
-                return;
-            }
             if (!faceBusy.compareAndSet(false, true)) {
                 return;
             }
-            lastFaceDetectTime = now;
+            faceAcquired = true;
+            // Post timeout to prevent permanent faceBusy deadlock if processExecutor is interrupted
+            mainHandler.postDelayed(faceBusyTimeout, 500);
 
-            // New architecture: zero-copy transfer via HardwareBuffer
             HardwareBuffer hwBuf = null;
             FrameMetadata meta = null;
-            if (NativeEngine.supportsHardwareBuffer()) {
+            if (CameraAlgoSdk.supportsHardwareBuffer()) {
                 hwBuf = image.getHardwareBuffer();
-                meta = cameraEngine.extractMetadata(cameraEngine.getLastCaptureResult());
+                meta = cameraEngine.metadataForTimestamp(image.getTimestamp());
             }
 
             final int imgW = image.getWidth();
@@ -505,6 +548,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
             image = null;
 
             if (hwBuf == null) {
+                mainHandler.removeCallbacks(faceBusyTimeout);
                 faceBusy.set(false);
                 return;
             }
@@ -513,26 +557,33 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
             final FrameMetadata finalMeta = meta;
             processExecutor.execute(() -> {
                 try {
-                    float[] faceData = NativeEngine.getInstance().nativeProcessPreviewFrame(
-                            mPreviewPipeline, finalBuf, finalMeta);
+                    CameraAlgoSdk sdk = cameraAlgoSdk;
+                    if (sdk == null || !sdk.isReady()) return;
+                    CameraAlgoSdk.PreviewFrameResult result =
+                            sdk.processPreview(finalBuf, finalMeta);
+                    if (result.status == CameraAlgoSdk.STATUS_SKIPPED
+                            || result.status == CameraAlgoSdk.STATUS_NOT_READY) {
+                        return;
+                    }
+                    float[] faceData = result.faces;
                     mainHandler.post(() -> {
                         if (!isAdded() || cameraOverlay == null) return;
-                        if (!faceDetectEnabled || uiMode != CameraEngine.MODE_PHOTO) {
-                            cameraOverlay.clearFaces();
-                            return;
-                        }
                         cameraOverlay.setPreviewSize(imgW, imgH);
                         cameraOverlay.setFaces(parseFaceResults(faceData));
                     });
                 } finally {
                     finalBuf.close();
+                    mainHandler.removeCallbacks(faceBusyTimeout);
                     faceBusy.set(false);
                 }
             });
         } catch (Exception e) {
             Log.e(TAG, "preview face detect error", e);
-            faceBusy.set(false);
         } finally {
+            if (faceAcquired) {
+                mainHandler.removeCallbacks(faceBusyTimeout);
+                faceBusy.set(false);
+            }
             if (image != null) {
                 try {
                     image.close();
@@ -583,70 +634,86 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private void doCapture() {
         if (cameraEngine == null || isCapturing) return;
         isCapturing = true;
-        saveProgress.setVisibility(View.VISIBLE);
-        animateCaptureFlash();
-        if (shutterSoundEnabled && shutterSound != null) {
-            try {
-                shutterSound.play(MediaActionSound.SHUTTER_CLICK);
-            } catch (Exception ignored) {
-            }
-        }
-
-        int iso = cameraEngine.getCurrentIso();
-        int frames = cameraEngine.frameCountForIso(iso);
-        activePhotoCaptureId = cameraMediaStore.beginPhotoCapture();
-        renderThumbnailState(cameraMediaStore.getCurrentState(), false);
-        Log.i(TAG, "Capture started: iso=" + iso + " frames=" + frames + " captureId=" + activePhotoCaptureId);
-
-        // Stage 1: Capture preview frame as instant thumbnail
-        capturePreviewAsThumbnail(activePhotoCaptureId);
-
-        processingText.setText(frames <= 1
-                ? getString(R.string.capture_processing)
-                : getString(R.string.capture_frames, frames));
-        processingIndicator.setVisibility(View.VISIBLE);
-
-        cameraEngine.setFrameCallback(new CameraEngine.FrameCallback() {
-            @Override
-            public void onFirstCaptureFrame(byte[] nv21Data, int width, int height, FrameMetadata metadata) {
-                // Stage 2: First capture frame arrived — update thumbnail
-                Log.d(TAG, "First capture frame: " + width + "x" + height + " iso=" + metadata.iso);
-                long captureId = activePhotoCaptureId;
-                processExecutor.execute(() -> updateThumbnailFromCaptureFrame(captureId, nv21Data, width, height));
-            }
-
-            @Override
-            public void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
-                // Stage 3: All frames ready — run algorithm post-processing
-                Log.i(TAG, "Burst complete: " + buffers.size() + " frames, starting post-processing");
-                long captureId = activePhotoCaptureId;
-                processExecutor.execute(() -> processAndSave(captureId, buffers, metadataList));
-            }
-        });
-
-        cameraEngine.captureStillBurst(new CameraEngine.BurstCallback() {
-            @Override
-            public void onBurstComplete(List<byte[]> nv21Frames, int width, int height, int captureIso) {
-                // Legacy fallback: only used when HardwareBuffer is unavailable
-                if (!NativeEngine.supportsHardwareBuffer()) {
-                    Log.d(TAG, "Falling back to legacy NV21 path");
-                    long captureId = activePhotoCaptureId;
-                    processExecutor.execute(() -> processAndSaveLegacy(captureId, nv21Frames, width, height, captureIso));
+        try {
+            saveProgress.setVisibility(View.VISIBLE);
+            animateCaptureFlash();
+            if (shutterSoundEnabled && shutterSound != null) {
+                try {
+                    shutterSound.play(MediaActionSound.SHUTTER_CLICK);
+                } catch (Exception ignored) {
                 }
             }
 
-            @Override
-            public void onBurstFailed(String reason) {
-                Log.e(TAG, "Burst failed: " + reason);
-                mainHandler.post(() -> {
-                    isCapturing = false;
-                    saveProgress.setVisibility(View.GONE);
-                    processingIndicator.setVisibility(View.GONE);
-                    renderThumbnailState(cameraMediaStore.setPhotoSaveFailed(activePhotoCaptureId, null), false);
-                    showError(getString(R.string.error_capture_failed) + ": " + reason);
-                });
-            }
-        });
+            int iso = cameraEngine.getCurrentIso();
+            FrameMetadata currentMeta =
+                    cameraEngine.extractMetadata(cameraEngine.getLastCaptureResult());
+            currentMeta.approximate = true;
+            CameraAlgoSdk sdk = cameraAlgoSdk;
+            int frames = sdk != null && sdk.isReady()
+                    ? sdk.adviseCaptureFrameCount(currentMeta) : 1;
+            activePhotoCaptureId = cameraMediaStore.beginPhotoCapture();
+            renderThumbnailState(cameraMediaStore.getCurrentState(), false);
+            Log.i(TAG, "Capture started: iso=" + iso + " frames=" + frames + " captureId=" + activePhotoCaptureId);
+
+            // Stage 1: Capture preview frame as instant thumbnail
+            capturePreviewAsThumbnail(activePhotoCaptureId);
+
+            processingText.setText(frames <= 1
+                    ? getString(R.string.capture_processing)
+                    : getString(R.string.capture_frames, frames));
+            processingIndicator.setVisibility(View.VISIBLE);
+
+            cameraEngine.setFrameCallback(new CameraEngine.FrameCallback() {
+                @Override
+                public void onFirstCaptureFrame(byte[] nv21Data, int width, int height, FrameMetadata metadata) {
+                    // Stage 2: First capture frame arrived — update thumbnail
+                    Log.d(TAG, "First capture frame: " + width + "x" + height + " iso=" + metadata.iso);
+                    long captureId = activePhotoCaptureId;
+                    processExecutor.execute(() -> updateThumbnailFromCaptureFrame(captureId, nv21Data, width, height));
+                }
+
+                @Override
+                public void onBurstComplete(List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
+                    // Stage 3: All frames ready — run algorithm post-processing
+                    Log.i(TAG, "Burst complete: " + buffers.size() + " frames, starting post-processing");
+                    long captureId = activePhotoCaptureId;
+                    processExecutor.execute(() -> processAndSave(captureId, buffers, metadataList));
+                }
+            });
+
+            cameraEngine.captureStillBurst(frames, new CameraEngine.BurstCallback() {
+                @Override
+                public void onBurstComplete(List<byte[]> nv21Frames, int width, int height, int captureIso) {
+                    // Legacy fallback: only used when HardwareBuffer is unavailable
+                    if (!CameraAlgoSdk.supportsHardwareBuffer()) {
+                        Log.d(TAG, "Falling back to legacy NV21 path");
+                        long captureId = activePhotoCaptureId;
+                        processExecutor.execute(() -> processAndSaveLegacy(captureId, nv21Frames, width, height, captureIso));
+                    }
+                }
+
+                @Override
+                public void onBurstFailed(String reason) {
+                    Log.e(TAG, "Burst failed: " + reason);
+                    mainHandler.post(() -> finishCaptureWithError(reason));
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "doCapture failed", e);
+            finishCaptureWithError(e.getMessage());
+        }
+    }
+
+    /**
+     * Centralized error handler for capture failures.
+     * Ensures isCapturing and UI state are always reset on error paths.
+     */
+    private void finishCaptureWithError(String reason) {
+        isCapturing = false;
+        saveProgress.setVisibility(View.GONE);
+        processingIndicator.setVisibility(View.GONE);
+        renderThumbnailState(cameraMediaStore.setPhotoSaveFailed(activePhotoCaptureId, null), false);
+        showError(getString(R.string.error_capture_failed) + ": " + reason);
     }
 
     private void capturePreviewAsThumbnail(long captureId) {
@@ -705,11 +772,10 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private void processAndSave(long captureId, List<HardwareBuffer> buffers, List<FrameMetadata> metadataList) {
         try {
             Log.i(TAG, "Stage 3: post-processing " + buffers.size() + " frames via HardwareBuffer");
-            byte[] jpeg = NativeEngine.getInstance().nativeProcessCapture(
-                    mCapturePipeline,
-                    buffers.toArray(new HardwareBuffer[0]),
-                    metadataList.toArray(new FrameMetadata[0]),
-                    95);
+            CameraAlgoSdk sdk = cameraAlgoSdk;
+            byte[] jpeg = sdk != null && sdk.isReady()
+                    ? sdk.processCapture(buffers, metadataList, 95)
+                    : null;
             if (jpeg == null) {
                 Log.e(TAG, "Stage 3: nativeProcessCapture returned null");
                 mainHandler.post(() -> {
@@ -782,16 +848,17 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         try {
             Log.i(TAG, "Post-processing " + frames.size() + " frames (legacy) @ " + width + "x" + height
                     + " iso=" + iso);
-            // Use NativeEngine's fallback path (via DirectByteBuffer)
-            // Since NativeEngine doesn't expose a direct NV21 byte[] interface,
-            // fall back to Android YuvImage encoding here
-            byte[] jpeg = null;
-            if (!frames.isEmpty()) {
-                YuvImage yuv = new YuvImage(frames.get(0), ImageFormat.NV21, width, height, null);
-                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-                yuv.compressToJpeg(new android.graphics.Rect(0, 0, width, height), 95, out);
-                jpeg = out.toByteArray();
+            List<FrameMetadata> metadata = new ArrayList<>(frames.size());
+            for (int i = 0; i < frames.size(); i++) {
+                FrameMetadata frameMetadata = new FrameMetadata();
+                frameMetadata.iso = iso;
+                frameMetadata.approximate = true;
+                metadata.add(frameMetadata);
             }
+            CameraAlgoSdk sdk = cameraAlgoSdk;
+            byte[] jpeg = sdk != null && sdk.isReady()
+                    ? sdk.processCaptureNv21(frames, metadata, width, height, 95)
+                    : null;
             if (jpeg == null) {
                 mainHandler.post(() -> {
                     isCapturing = false;
@@ -913,6 +980,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         if (cameraEngine == null) return;
         flashMode = (flashMode + 1) % 3;
         cameraEngine.setFlashMode(flashMode);
+        scheduleSessionControlUpdate();
         updateFlashUi();
         bounce(btnFlash);
     }
@@ -960,6 +1028,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private void toggleAiMode() {
         isAiEnabled = !isAiEnabled;
         updateAiModeUi();
+        scheduleSessionControlUpdate();
         Log.d(TAG, "AI mode toggled: " + (isAiEnabled ? "open" : "close"));
         bounce(btnAi);
     }
@@ -1147,6 +1216,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         Log.i(TAG, "Mode switch: " + (mode == CameraEngine.MODE_PHOTO ? "PHOTO" : "VIDEO"));
         uiMode = mode;
         updateModeUi();
+        scheduleSessionControlUpdate();
 
         if (mode == CameraEngine.MODE_VIDEO) {
             cameraOverlay.clearFaces();
@@ -1294,14 +1364,10 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     @Override
     public void onDestroyView() {
         Log.d(TAG, "onDestroyView, releasing native resources");
-        if (mPreviewPipeline != 0 && mEngineHandle != 0) {
-            NativeEngine.getInstance().nativeDestroyPipeline(mEngineHandle, mPreviewPipeline);
-        }
-        if (mCapturePipeline != 0 && mEngineHandle != 0) {
-            NativeEngine.getInstance().nativeDestroyPipeline(mEngineHandle, mCapturePipeline);
-        }
-        if (mEngineHandle != 0) {
-            NativeEngine.getInstance().nativeDestroyEngine(mEngineHandle);
+        CameraAlgoSdk sdk = cameraAlgoSdk;
+        cameraAlgoSdk = null;
+        if (sdk != null) {
+            sdk.close();
         }
         if (shutterSound != null) {
             shutterSound.release();

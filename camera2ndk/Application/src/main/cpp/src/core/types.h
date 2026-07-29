@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace camera_engine {
@@ -23,7 +24,17 @@ enum class AlgorithmId {
     SATURATION = 6
 };
 
-enum class ResultCode { OK = 0, ERROR = 1, FRAME_SKIPPED = 2 };
+enum class ResultCode {
+    OK = 0,
+    ERROR = 1,
+    FRAME_SKIPPED = 2,
+    NOT_READY = 3,
+    INIT_FAILED = 4
+};
+
+enum class PipelineType { PREVIEW = 1, CAPTURE = 2, VIDEO = 3 };
+
+enum class CameraMode { PHOTO = 0, VIDEO = 1 };
 
 struct AlgorithmConfig {
     bool enabled = true;
@@ -38,6 +49,39 @@ struct PipelineConfig {
     int faceDetectIntervalMs = 180;
     int jpegQuality = 95;
     bool faceDetectEnabled = true;
+    std::string assetDir;
+};
+
+/**
+ * Runtime state collected by the Java layer. Values express user intent and
+ * camera state only; the native decision layer owns all algorithm choices.
+ */
+struct SessionControl {
+    CameraMode mode = CameraMode::PHOTO;
+    int lensFacing = 0;
+    int flashMode = 0;
+    bool preferFaceDetect = true;
+    bool preferDenoise = true;
+    bool preferSharpen = true;
+    bool preferHdr = false;
+    bool preferClahe = false;
+    bool preferSaturation = false;
+    bool preferBokeh = false;
+    int jpegQuality = 95;
+    int analysisMaxSide = 320;
+};
+
+struct AlgorithmStage {
+    AlgorithmId id = AlgorithmId::DENOISE;
+    std::unordered_map<uint32_t, float> params;
+};
+
+struct DecisionPlan {
+    bool skipEntireFrame = false;
+    std::vector<AlgorithmId> needInit;
+    std::vector<AlgorithmStage> stages;
+    std::vector<AlgorithmId> needUninit;
+    uint32_t reasonFlags = 0;
 };
 
 struct FaceRect {
@@ -49,12 +93,14 @@ struct FaceRect {
 struct PreviewResult {
     std::vector<FaceRect> faces;
     int64_t timestampNs = 0;
+    ResultCode status = ResultCode::OK;
 };
 
 struct CaptureResult {
     std::vector<uint8_t> jpegData;
     int32_t iso = 0;
     int64_t timestampNs = 0;
+    ResultCode status = ResultCode::OK;
 };
 
 } // namespace camera_engine

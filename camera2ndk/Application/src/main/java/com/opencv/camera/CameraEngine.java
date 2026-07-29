@@ -40,6 +40,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -137,9 +138,14 @@ public class CameraEngine {
 
     // HardwareBuffer / FrameCallback
     private FrameCallback frameCallback;
+    private final AtomicInteger frameCallbackGeneration = new AtomicInteger(0);
+    private volatile int burstStartGeneration = 0;
     private final List<HardwareBuffer> burstHwBuffers = new ArrayList<>();
     private final List<FrameMetadata> burstMetas = new ArrayList<>();
     private volatile CaptureResult lastCaptureResult;
+    private final Object metadataLock = new Object();
+    private final LinkedHashMap<Long, FrameMetadata> metadataByTimestamp =
+            new LinkedHashMap<>();
 
     // Video
     private MediaRecorder mediaRecorder;
@@ -165,7 +171,7 @@ public class CameraEngine {
     }
 
     /**
-     * Frame callback interface — passes HardwareBuffer + FrameMetadata to NativeEngine.
+     * Frame callback interface — passes HardwareBuffer + FrameMetadata to CameraAlgoSdk.
      * The capture flow follows a 3-stage thumbnail pipeline:
      *   1. Preview frame → instant thumbnail (on shutter click)
      *   2. First capture frame → thumbnail update (when HAL delivers)
@@ -194,6 +200,7 @@ public class CameraEngine {
 
     public void setFrameCallback(FrameCallback callback) {
         this.frameCallback = callback;
+        this.frameCallbackGeneration.incrementAndGet();
     }
 
     public void startCamera() {
@@ -223,12 +230,14 @@ public class CameraEngine {
     }
 
     /**
-     * Set capture mode (photo/video). Rebuild session via stopCamera + createPreviewSession.
+     * Set capture mode (photo/video). Caller MUST call createPreviewSession()
+     * afterwards to rebuild the capture session with the new mode.
      */
     public void setCaptureMode(int mode) {
         if (captureMode == mode) return;
         if (isRecording) return;
         captureMode = mode;
+        isSessionReady = false;  // Mark session as stale; must be rebuilt
     }
 
     public int getCaptureMode() {
@@ -343,6 +352,14 @@ public class CameraEngine {
      * Capture: determine frame count by ISO; AF convergence + AE precapture/lock then burst YUV.
      */
     public void captureStillBurst(BurstCallback cb) {
+        captureStillBurst(1, cb);
+    }
+
+    /**
+     * Executes a burst size chosen by the native CaptureDecision system.
+     * Camera2 owns only the HAL request execution.
+     */
+    public void captureStillBurst(int advisedFrameCount, BurstCallback cb) {
         if (cameraDevice == null || !isSessionReady || captureMode != MODE_PHOTO) {
             if (cb != null) cb.onBurstFailed("Camera not ready");
             return;
@@ -357,8 +374,7 @@ public class CameraEngine {
 
         this.burstCallback = cb;
         int iso = Math.max(50, currentIso);
-        int frames = this.frameCountForIso(iso);
-        frames = Math.min(frames, MAX_BURST);
+        int frames = Math.max(1, Math.min(advisedFrameCount, MAX_BURST));
         pendingBurstFrames = frames;
 
         synchronized (burstLock) {
@@ -490,8 +506,14 @@ public class CameraEngine {
 
     private void fireBurstCapture(int frameCount) {
         if (currentState == STATE_CAPTURING) return;
+        // Close any existing HardwareBuffers before clearing to prevent native resource leaks
+        for (HardwareBuffer buf : burstHwBuffers) {
+            try { buf.close(); } catch (Exception ignored) {}
+        }
         burstHwBuffers.clear();
         burstMetas.clear();
+        // Snapshot frame callback generation for race protection
+        burstStartGeneration = frameCallbackGeneration.get();
         lastCaptureResult = null;
         try {
             if (cameraDevice == null || captureReader == null) {
@@ -524,6 +546,7 @@ public class CameraEngine {
                                                @NonNull CaptureRequest request,
                                                @NonNull TotalCaptureResult result) {
                     lastCaptureResult = result;
+                    recordMetadata(result);
                     Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
                     if (iso != null) {
                         burstIso = iso;
@@ -568,6 +591,8 @@ public class CameraEngine {
             byte[] nv21 = imageToNv21(image);
             int w = image.getWidth();
             int h = image.getHeight();
+            long imageTimestamp = image.getTimestamp();
+            FrameMetadata frameMetadata = metadataForTimestamp(imageTimestamp);
 
             // Extract HardwareBuffer before closing the image
             HardwareBuffer hwBuf = null;
@@ -585,9 +610,10 @@ public class CameraEngine {
 
             // Notify first-frame arrival for instant thumbnail update
             int frameIndex = burstReceived.get();
-            if (frameIndex == 0 && frameCallback != null) {
+            int currentGen = frameCallbackGeneration.get();
+            if (frameIndex == 0 && frameCallback != null && currentGen == burstStartGeneration) {
                 Log.d(TAG, "First capture frame arrived: " + w + "x" + h);
-                frameCallback.onFirstCaptureFrame(nv21, w, h, extractMetadata(lastCaptureResult));
+                frameCallback.onFirstCaptureFrame(nv21, w, h, frameMetadata);
             }
 
             boolean complete = false;
@@ -602,7 +628,7 @@ public class CameraEngine {
                 // New architecture: pass HardwareBuffer via FrameCallback
                 if (hwBuf != null) {
                     burstHwBuffers.add(hwBuf);
-                    burstMetas.add(extractMetadata(lastCaptureResult));
+                    burstMetas.add(frameMetadata);
                 }
                 int got = burstReceived.incrementAndGet();
                 if (got >= burstTarget) {
@@ -623,7 +649,11 @@ public class CameraEngine {
                 if (cb != null) {
                     cb.onBurstComplete(copy, w, h, iso);
                 }
-                if (frameCallback != null && !burstHwBuffers.isEmpty()) {
+                // Only invoke frameCallback if generation matches — prevents
+                // stale callbacks from an earlier burst from triggering the wrong handler.
+                int completionGen = frameCallbackGeneration.get();
+                if (frameCallback != null && !burstHwBuffers.isEmpty()
+                        && completionGen == burstStartGeneration) {
                     frameCallback.onBurstComplete(new ArrayList<>(burstHwBuffers), new ArrayList<>(burstMetas));
                 }
                 // Ownership of HardwareBuffer objects transferred to callback;
@@ -663,6 +693,12 @@ public class CameraEngine {
             iso = burstIso;
             burstActive = false;
             burstFrames.clear();
+            // Close HardwareBuffers on timeout path to prevent native resource leaks
+            for (HardwareBuffer buf : burstHwBuffers) {
+                try { buf.close(); } catch (Exception ignored) {}
+            }
+            burstHwBuffers.clear();
+            burstMetas.clear();
         }
         Log.w(TAG, "Burst timeout, using " + copy.size() + " frames");
         BurstCallback cb = burstCallback;
@@ -979,22 +1015,36 @@ public class CameraEngine {
     public int getSensorOrientation() { return sensorOrientation; }
     public int getCurrentIso() { return currentIso; }
 
-    /**
-     * Determine multi-frame denoise frame count by ISO.
-     * ISO &lt; 200 → 1 frame / 200–399 → 3 frames / 400–799 → 4 frames
-     * 800–1599 → 5 frames / ≥1600 → 6 frames
-     */
-    public int frameCountForIso(int iso) {
-        if (iso < 200) return 1;
-        if (iso < 400) return 3;
-        if (iso < 800) return 4;
-        if (iso < 1600) return 5;
-        return 6;
-    }
-
     /** Get the last CaptureResult (for preview frame metadata extraction) */
     public CaptureResult getLastCaptureResult() {
         return lastCaptureResult;
+    }
+
+    /**
+     * Returns metadata paired by SENSOR_TIMESTAMP when available.
+     * A fallback is explicitly marked approximate for conservative native decisions.
+     */
+    public FrameMetadata metadataForTimestamp(long timestampNs) {
+        synchronized (metadataLock) {
+            FrameMetadata exact = metadataByTimestamp.remove(timestampNs);
+            if (exact != null) return exact;
+        }
+        FrameMetadata fallback = extractMetadata(lastCaptureResult);
+        fallback.timestampNs = timestampNs;
+        fallback.approximate = true;
+        return fallback;
+    }
+
+    private void recordMetadata(CaptureResult result) {
+        Long timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP);
+        if (timestamp == null) return;
+        synchronized (metadataLock) {
+            metadataByTimestamp.put(timestamp, extractMetadata(result));
+            while (metadataByTimestamp.size() > 32) {
+                Long oldest = metadataByTimestamp.keySet().iterator().next();
+                metadataByTimestamp.remove(oldest);
+            }
+        }
     }
 
     public int getJpegOrientation() {
@@ -1134,6 +1184,8 @@ public class CameraEngine {
                 public void onCaptureCompleted(@NonNull CameraCaptureSession session,
                                                @NonNull CaptureRequest request,
                                                @NonNull TotalCaptureResult result) {
+                    lastCaptureResult = result;
+                    recordMetadata(result);
                     processResult(result);
                 }
             };
@@ -1387,9 +1439,12 @@ public class CameraEngine {
     /**
      * Extract FrameMetadata from a CaptureResult.
      */
-    public static FrameMetadata extractMetadata(CaptureResult result) {
+    public FrameMetadata extractMetadata(CaptureResult result) {
         FrameMetadata meta = new FrameMetadata();
-        if (result == null) return meta;
+        if (result == null) {
+            meta.approximate = true;
+            return meta;
+        }
         meta.timestampNs = result.get(CaptureResult.SENSOR_TIMESTAMP) != null
                 ? result.get(CaptureResult.SENSOR_TIMESTAMP) : 0;
         meta.iso = result.get(CaptureResult.SENSOR_SENSITIVITY) != null
@@ -1406,6 +1461,14 @@ public class CameraEngine {
                 ? result.get(CaptureResult.CONTROL_AF_STATE) : 0;
         meta.awbState = result.get(CaptureResult.CONTROL_AWB_STATE) != null
                 ? result.get(CaptureResult.CONTROL_AWB_STATE) : 0;
+        meta.focalLength = result.get(CaptureResult.LENS_FOCAL_LENGTH) != null
+                ? result.get(CaptureResult.LENS_FOCAL_LENGTH) : 0f;
+        meta.focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) != null
+                ? result.get(CaptureResult.LENS_FOCUS_DISTANCE) : 0f;
+        meta.rotation = getJpegOrientation();
+        meta.lensFacing = isFrontCamera() ? 2 : 1;
+        meta.frameNumber = (int) Math.min(Integer.MAX_VALUE, result.getFrameNumber());
+        meta.approximate = false;
         return meta;
     }
 

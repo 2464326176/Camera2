@@ -6,6 +6,7 @@
  */
 #include "src/core/frame.h"
 #include <android/log.h>
+#include <algorithm>
 #include <cstring>
 
 #define LOG_TAG "YuvFrame"
@@ -112,33 +113,13 @@ cv::Mat YuvFrame::toBgrDownscaled(int maxSide) const {
         scale = (float)maxSide / m_height;
     }
 
-    if (scale >= 1.0f) {
-        return toBgr();
-    }
+    cv::Mat bgr = toBgr();
+    if (bgr.empty() || scale >= 1.0f) return bgr;
 
-    int smallW = (int)(m_width * scale);
-    int smallH = (int)(m_height * scale);
-
-    // Downscale first via NV21 to BGR at smaller size
-    int ySize = m_width * m_height;
-    int uvSize = ySize / 2;
-    std::vector<uint8_t> nv21(ySize + uvSize);
-
-    for (int r = 0; r < m_height; r++) {
-        memcpy(nv21.data() + r * m_width, getYRow(r), m_width);
-    }
-    if (m_buffer->uPlane.pixelStride == 2) {
-        memcpy(nv21.data() + ySize, m_buffer->uPlane.data, uvSize);
-    } else {
-        for (int r = 0; r < m_height / 2; r++) {
-            memcpy(nv21.data() + ySize + r * m_width, getUvRow(r), m_width);
-        }
-    }
-
-    cv::Mat yuv(m_height + m_height / 2, m_width, CV_8UC1, nv21.data());
+    const int smallW = std::max(1, static_cast<int>(m_width * scale));
+    const int smallH = std::max(1, static_cast<int>(m_height * scale));
     cv::Mat bgrSmall;
-    cv::cvtColor(yuv, bgrSmall, cv::COLOR_YUV2BGR_NV21);
-    cv::resize(bgrSmall, bgrSmall, cv::Size(smallW, smallH), 0, 0, cv::INTER_AREA);
+    cv::resize(bgr, bgrSmall, cv::Size(smallW, smallH), 0, 0, cv::INTER_AREA);
     return bgrSmall;
 }
 

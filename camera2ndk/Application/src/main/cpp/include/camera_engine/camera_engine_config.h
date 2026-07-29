@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "camera_engine_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,7 +19,8 @@ typedef enum CameraEngineAlgorithm {
 
 typedef enum CameraEnginePipelineType {
     CAMERA_ENGINE_PIPELINE_PREVIEW = 1,
-    CAMERA_ENGINE_PIPELINE_CAPTURE = 2
+    CAMERA_ENGINE_PIPELINE_CAPTURE = 2,
+    CAMERA_ENGINE_PIPELINE_VIDEO = 3
 } CameraEnginePipelineType;
 
 #define CAMERA_ENGINE_PARAM_DENOISE_STRENGTH      1001u
@@ -30,6 +32,10 @@ typedef enum CameraEnginePipelineType {
 
 typedef struct CameraEnginePreviewConfig {
     uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    CameraEnginePixelFormat format;
+    uint32_t max_faces;
     int32_t enable_face_detect;
     int32_t enable_denoise;
     int32_t enable_sharpen;
@@ -45,6 +51,9 @@ typedef struct CameraEnginePreviewConfig {
 
 typedef struct CameraEngineCaptureConfig {
     uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    CameraEnginePixelFormat format;
     int32_t enable_denoise;
     int32_t enable_sharpen;
     int32_t enable_hdr;
@@ -71,6 +80,36 @@ typedef struct CameraEngineAlgorithmParam {
     float value;
     uint32_t reserved[8];
 } CameraEngineAlgorithmParam;
+
+/**
+ * User intent and camera mode collected by the app. These are inputs to the
+ * native decision system, not direct algorithm enable commands.
+ */
+typedef struct CameraEngineSessionControl {
+    uint32_t struct_size;
+    CameraEngineMode mode;
+    CameraEngineLensFacing lens_facing;
+    int32_t flash_mode;
+    int32_t prefer_face_detect;
+    int32_t prefer_denoise;
+    int32_t prefer_sharpen;
+    int32_t prefer_hdr;
+    int32_t prefer_clahe;
+    int32_t prefer_saturation;
+    int32_t prefer_bokeh;
+    uint32_t jpeg_quality;
+    uint32_t analysis_max_side;
+    uint32_t reserved[16];
+    void* reserved_ptr[4];
+} CameraEngineSessionControl;
+
+typedef struct CameraEngineCaptureAdvice {
+    uint32_t struct_size;
+    uint32_t burst_frame_count;
+    uint32_t reason_flags;
+    uint32_t reserved[16];
+    void* reserved_ptr[4];
+} CameraEngineCaptureAdvice;
 
 #ifdef __cplusplus
 }

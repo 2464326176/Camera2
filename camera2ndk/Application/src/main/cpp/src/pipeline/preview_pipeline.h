@@ -7,10 +7,10 @@
 #pragma once
 #include "src/pipeline/pipeline_base.h"
 #include "src/core/frame.h"
-#include "src/algorithms/face_detect.h"
+#include "src/algorithm/algorithm_manager.h"
+#include "src/decision/decision.h"
 #include <memory>
 #include <mutex>
-#include <chrono>
 
 namespace camera_engine {
 
@@ -19,7 +19,7 @@ namespace camera_engine {
  */
 class PreviewPipeline : public PipelineBase {
 public:
-    PreviewPipeline() = default;
+    PreviewPipeline();
 
     /** Applies preview pipeline configuration such as algorithm toggles. */
     ResultCode configure(const PipelineConfig& config) override;
@@ -33,14 +33,18 @@ public:
     /** Releases face detection resources when preview processing stops. */
     void releaseFaceDetector();
 
+    /** Stores UI/camera state; algorithm decisions remain native-owned. */
+    void updateSessionControl(const SessionControl& control);
+
     /** Processes one preview frame and returns face metadata plus preview image. */
     PreviewResult process(const YuvFrame& frame);
 
 private:
     PipelineConfig m_config;
-    FaceDetector m_faceDetector;
+    SessionControl m_control;
+    PreviewDecision m_decision;
+    AlgorithmManager m_algorithmManager;
     std::mutex m_mutex;
-    std::chrono::steady_clock::time_point m_lastDetectTime;
 };
 
 } // namespace camera_engine

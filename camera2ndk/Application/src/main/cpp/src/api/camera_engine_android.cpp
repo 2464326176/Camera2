@@ -22,7 +22,28 @@ camera_engine::FrameMetadata toInternalMetadata(const CameraEngineFrameMetadata&
     internal.timestampNs = metadata.timestamp_ns;
     internal.iso = metadata.iso;
     internal.exposureTimeNs = metadata.exposure_time_ns;
+    internal.flashState = metadata.flash_state;
+    internal.lensAperture = metadata.aperture;
+    internal.aeState = metadata.ae_state;
+    internal.afState = metadata.af_state;
+    internal.awbState = metadata.awb_state;
+    internal.focalLength = metadata.focal_length;
+    internal.focusDistance = metadata.focus_distance;
+    internal.rotation = static_cast<int32_t>(metadata.rotation);
+    internal.lensFacing = static_cast<int32_t>(metadata.lens_facing);
+    internal.frameNumber = metadata.frame_number;
+    internal.approximate = metadata.approximate != 0;
     return internal;
+}
+
+CameraEngineStatus toPublicStatus(camera_engine::ResultCode status) {
+    switch (status) {
+        case camera_engine::ResultCode::OK: return CAMERA_ENGINE_OK;
+        case camera_engine::ResultCode::FRAME_SKIPPED: return CAMERA_ENGINE_SKIPPED;
+        case camera_engine::ResultCode::NOT_READY: return CAMERA_ENGINE_NOT_READY;
+        case camera_engine::ResultCode::INIT_FAILED: return CAMERA_ENGINE_ERROR_INIT_FAILED;
+        default: return CAMERA_ENGINE_ERROR_PROCESS_FAILED;
+    }
 }
 
 void copyFaces(const std::vector<camera_engine::FaceRect>& faces, CameraEnginePreviewResult* result) {
@@ -37,6 +58,13 @@ void copyFaces(const std::vector<camera_engine::FaceRect>& faces, CameraEnginePr
         dst.rect.right = static_cast<float>(faces[i].x + faces[i].w);
         dst.rect.bottom = static_cast<float>(faces[i].y + faces[i].h);
         dst.score = faces[i].confidence;
+        CameraEnginePoint* points[5] = {
+            &dst.left_eye, &dst.right_eye, &dst.nose,
+            &dst.mouth_left, &dst.mouth_right};
+        for (int p = 0; p < 5; ++p) {
+            points[p]->x = faces[i].landmarks[p * 2];
+            points[p]->y = faces[i].landmarks[p * 2 + 1];
+        }
     }
     result->face_count = count;
 }
@@ -71,15 +99,17 @@ CameraEngineStatus camera_engine_android_process_preview_hardware_buffer(
     CameraEnginePreviewResult* result
 ) {
     if (context == nullptr || frame == nullptr) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> contextLock(context->mutex);
     std::shared_ptr<camera_engine::HardwareBufferRef> bufferRef;
     camera_engine::YuvFrame yuvFrame;
     if (!makeHardwareBufferFrame(frame, &bufferRef, &yuvFrame)) return CAMERA_ENGINE_ERROR_ANDROID_BUFFER_LOCK_FAILED;
     const camera_engine::PreviewResult internalResult = context->previewPipeline->process(yuvFrame);
     if (result != nullptr) {
+        result->status = toPublicStatus(internalResult.status);
         result->face_count = 0;
         copyFaces(internalResult.faces, result);
     }
-    return CAMERA_ENGINE_OK;
+    return toPublicStatus(internalResult.status);
 }
 
 CameraEngineStatus camera_engine_android_process_capture_hardware_buffers(
@@ -89,6 +119,7 @@ CameraEngineStatus camera_engine_android_process_capture_hardware_buffers(
     CameraEngineCaptureResult* result
 ) {
     if (context == nullptr || frames == nullptr || frame_count == 0) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> contextLock(context->mutex);
     std::vector<std::shared_ptr<camera_engine::HardwareBufferRef>> bufferRefs;
     std::vector<camera_engine::YuvFrame> yuvFrames;
     bufferRefs.reserve(frame_count);
@@ -101,8 +132,14 @@ CameraEngineStatus camera_engine_android_process_capture_hardware_buffers(
         yuvFrames.push_back(yuvFrame);
     }
     const camera_engine::CaptureResult internalResult = context->capturePipeline->process(yuvFrames);
+    if (internalResult.status != camera_engine::ResultCode::OK) {
+        if (result != nullptr) result->status = toPublicStatus(internalResult.status);
+        return toPublicStatus(internalResult.status);
+    }
     if (internalResult.jpegData.empty()) return CAMERA_ENGINE_ERROR_PROCESS_FAILED;
     if (result != nullptr) {
+        result->status = CAMERA_ENGINE_OK;
+        result->face_count = 0;
         if (!toJpegOutput(internalResult.jpegData, result->jpeg_output, &result->required_jpeg_capacity)) {
             return CAMERA_ENGINE_ERROR_BUFFER_TOO_SMALL;
         }

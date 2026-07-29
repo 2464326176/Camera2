@@ -29,6 +29,11 @@ typedef enum CameraEngineLensFacing {
     CAMERA_ENGINE_LENS_EXTERNAL = 3
 } CameraEngineLensFacing;
 
+typedef enum CameraEngineMode {
+    CAMERA_ENGINE_MODE_PHOTO = 0,
+    CAMERA_ENGINE_MODE_VIDEO = 1
+} CameraEngineMode;
+
 typedef struct CameraEngineSize {
     uint32_t width;
     uint32_t height;
@@ -66,9 +71,14 @@ typedef struct CameraEngineFrameMetadata {
     float aperture;
     float focal_length;
     float focus_distance;
+    int32_t flash_state;
+    int32_t ae_state;
+    int32_t af_state;
+    int32_t awb_state;
     CameraEngineRotation rotation;
     CameraEngineLensFacing lens_facing;
     uint32_t frame_number;
+    int32_t approximate;
     uint32_t reserved[16];
     void* reserved_ptr[4];
 } CameraEngineFrameMetadata;

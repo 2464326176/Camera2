@@ -26,6 +26,47 @@ camera_engine::FrameMetadata toInternalMetadata(const CameraEngineFrameMetadata&
     internal.timestampNs = metadata.timestamp_ns;
     internal.iso = metadata.iso;
     internal.exposureTimeNs = metadata.exposure_time_ns;
+    internal.flashState = metadata.flash_state;
+    internal.lensAperture = metadata.aperture;
+    internal.aeState = metadata.ae_state;
+    internal.afState = metadata.af_state;
+    internal.awbState = metadata.awb_state;
+    internal.focalLength = metadata.focal_length;
+    internal.focusDistance = metadata.focus_distance;
+    internal.rotation = static_cast<int32_t>(metadata.rotation);
+    internal.lensFacing = static_cast<int32_t>(metadata.lens_facing);
+    internal.frameNumber = metadata.frame_number;
+    internal.approximate = metadata.approximate != 0;
+    return internal;
+}
+
+CameraEngineStatus toPublicStatus(camera_engine::ResultCode status) {
+    switch (status) {
+        case camera_engine::ResultCode::OK: return CAMERA_ENGINE_OK;
+        case camera_engine::ResultCode::FRAME_SKIPPED: return CAMERA_ENGINE_SKIPPED;
+        case camera_engine::ResultCode::NOT_READY: return CAMERA_ENGINE_NOT_READY;
+        case camera_engine::ResultCode::INIT_FAILED: return CAMERA_ENGINE_ERROR_INIT_FAILED;
+        default: return CAMERA_ENGINE_ERROR_PROCESS_FAILED;
+    }
+}
+
+camera_engine::SessionControl toInternalControl(
+        const CameraEngineSessionControl& control) {
+    camera_engine::SessionControl internal;
+    internal.mode = control.mode == CAMERA_ENGINE_MODE_VIDEO
+        ? camera_engine::CameraMode::VIDEO
+        : camera_engine::CameraMode::PHOTO;
+    internal.lensFacing = static_cast<int>(control.lens_facing);
+    internal.flashMode = control.flash_mode;
+    internal.preferFaceDetect = control.prefer_face_detect != 0;
+    internal.preferDenoise = control.prefer_denoise != 0;
+    internal.preferSharpen = control.prefer_sharpen != 0;
+    internal.preferHdr = control.prefer_hdr != 0;
+    internal.preferClahe = control.prefer_clahe != 0;
+    internal.preferSaturation = control.prefer_saturation != 0;
+    internal.preferBokeh = control.prefer_bokeh != 0;
+    internal.jpegQuality = static_cast<int>(control.jpeg_quality);
+    internal.analysisMaxSide = static_cast<int>(control.analysis_max_side);
     return internal;
 }
 
@@ -59,8 +100,13 @@ bool makeYuvFrame(const CameraEngineFrame* frame, camera_engine::YuvFrame* out) 
     if (frame->image.format == CAMERA_ENGINE_PIXEL_FORMAT_NV21) {
         if (frame->image.plane_count < 1) return false;
         uPlane = toInternalPlane(frame->image.planes[0]);
-        uPlane.data = frame->image.planes[0].data + frame->image.width * frame->image.height;
-        uPlane.rowStride = static_cast<int>(frame->image.width);
+        // The Y plane may carry row padding, so the UV block starts after
+        // height * yRowStride bytes, not width * height. Using row_stride keeps
+        // the pointer correct when Y rows are not tightly packed.
+        const uint64_t yBytes = static_cast<uint64_t>(frame->image.planes[0].row_stride)
+                                 * frame->image.height;
+        uPlane.data = frame->image.planes[0].data + yBytes;
+        uPlane.rowStride = static_cast<int>(frame->image.planes[0].row_stride);
         uPlane.pixelStride = 2;
     } else {
         if (frame->image.plane_count < 3 || frame->image.planes[1].data == nullptr || frame->image.planes[2].data == nullptr) return false;
@@ -91,6 +137,13 @@ void copyFaces(const std::vector<camera_engine::FaceRect>& faces, CameraEnginePr
         dst.rect.right = static_cast<float>(faces[i].x + faces[i].w);
         dst.rect.bottom = static_cast<float>(faces[i].y + faces[i].h);
         dst.score = faces[i].confidence;
+        CameraEnginePoint* points[5] = {
+            &dst.left_eye, &dst.right_eye, &dst.nose,
+            &dst.mouth_left, &dst.mouth_right};
+        for (int p = 0; p < 5; ++p) {
+            points[p]->x = faces[i].landmarks[p * 2];
+            points[p]->y = faces[i].landmarks[p * 2 + 1];
+        }
     }
     result->face_count = count;
 }
@@ -138,6 +191,8 @@ bool toInternalAlgorithm(CameraEngineAlgorithm algorithm, camera_engine::Algorit
 const char* camera_engine_status_message(CameraEngineStatus status) {
     switch (status) {
         case CAMERA_ENGINE_OK: return "OK";
+        case CAMERA_ENGINE_SKIPPED: return "Skipped by native decision";
+        case CAMERA_ENGINE_NOT_READY: return "Not ready";
         case CAMERA_ENGINE_ERROR_INVALID_ARGUMENT: return "Invalid argument";
         case CAMERA_ENGINE_ERROR_INVALID_STATE: return "Invalid state";
         case CAMERA_ENGINE_ERROR_NOT_INITIALIZED: return "Not initialized";
@@ -148,6 +203,7 @@ const char* camera_engine_status_message(CameraEngineStatus status) {
         case CAMERA_ENGINE_ERROR_MODEL_LOAD_FAILED: return "Model load failed";
         case CAMERA_ENGINE_ERROR_PROCESS_FAILED: return "Image processing failed";
         case CAMERA_ENGINE_ERROR_ANDROID_BUFFER_LOCK_FAILED: return "Android buffer lock failed";
+        case CAMERA_ENGINE_ERROR_INIT_FAILED: return "Algorithm initialization failed";
         default: return "Unknown error";
     }
 }
@@ -175,7 +231,7 @@ void camera_engine_preview_config_init(CameraEnginePreviewConfig* config) {
     config->enable_face_detect = 1;
     config->enable_denoise = 1;
     config->enable_sharpen = 1;
-    config->face_detect_interval = 5;
+    config->face_detect_interval = 180;
     config->analysis_max_side = 320;
     config->denoise_strength = 1.0f;
     config->sharpen_strength = 0.5f;
@@ -197,6 +253,25 @@ void camera_engine_capture_config_init(CameraEngineCaptureConfig* config) {
     config->hdr_strength = 0.7f;
     config->clahe_clip_limit = 2.0f;
     config->saturation_factor = 1.0f;
+}
+
+void camera_engine_session_control_init(CameraEngineSessionControl* control) {
+    if (control == nullptr) return;
+    std::memset(control, 0, sizeof(CameraEngineSessionControl));
+    control->struct_size = sizeof(CameraEngineSessionControl);
+    control->mode = CAMERA_ENGINE_MODE_PHOTO;
+    control->prefer_face_detect = 1;
+    control->prefer_denoise = 1;
+    control->prefer_sharpen = 1;
+    control->jpeg_quality = 95;
+    control->analysis_max_side = 320;
+}
+
+void camera_engine_capture_advice_init(CameraEngineCaptureAdvice* advice) {
+    if (advice == nullptr) return;
+    std::memset(advice, 0, sizeof(CameraEngineCaptureAdvice));
+    advice->struct_size = sizeof(CameraEngineCaptureAdvice);
+    advice->burst_frame_count = 1;
 }
 
 void camera_engine_frame_metadata_init(CameraEngineFrameMetadata* metadata) {
@@ -224,14 +299,16 @@ CameraEngineStatus camera_engine_create(
     if (out_context == nullptr) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
     *out_context = nullptr;
     try {
-        auto* context = new CameraEngineContext();
+        auto context = std::make_unique<CameraEngineContext>();
         if (create_info != nullptr) {
             if (create_info->asset_dir != nullptr) context->assetDir = create_info->asset_dir;
             if (create_info->cache_dir != nullptr) context->cacheDir = create_info->cache_dir;
         }
         context->previewPipeline = std::make_unique<camera_engine::PreviewPipeline>();
         context->capturePipeline = std::make_unique<camera_engine::CapturePipeline>();
-        *out_context = context;
+        context->previewPipeline->updateSessionControl(context->sessionControl);
+        context->capturePipeline->updateSessionControl(context->sessionControl);
+        *out_context = context.release();
         return CAMERA_ENGINE_OK;
     } catch (const std::bad_alloc&) {
         return CAMERA_ENGINE_ERROR_OUT_OF_MEMORY;
@@ -252,6 +329,11 @@ CameraEngineStatus camera_engine_configure_preview(
         return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
     }
     camera_engine::PipelineConfig internalConfig;
+    internalConfig.width = static_cast<int>(config->width);
+    internalConfig.height = static_cast<int>(config->height);
+    internalConfig.format = toInternalYuvFormat(config->format);
+    internalConfig.maxFaces = static_cast<int>(config->max_faces);
+    internalConfig.assetDir = context->assetDir;
     internalConfig.faceDetectEnabled = config->enable_face_detect != 0;
     internalConfig.faceDetectIntervalMs = static_cast<int>(config->face_detect_interval);
     return context->previewPipeline->configure(internalConfig) == camera_engine::ResultCode::OK
@@ -267,11 +349,45 @@ CameraEngineStatus camera_engine_configure_capture(
         return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
     }
     camera_engine::PipelineConfig internalConfig;
+    internalConfig.width = static_cast<int>(config->width);
+    internalConfig.height = static_cast<int>(config->height);
+    internalConfig.format = toInternalYuvFormat(config->format);
+    internalConfig.assetDir = context->assetDir;
     internalConfig.faceDetectEnabled = config->enable_face_detect != 0;
     internalConfig.jpegQuality = static_cast<int>(config->jpeg_quality);
     return context->capturePipeline->configure(internalConfig) == camera_engine::ResultCode::OK
         ? CAMERA_ENGINE_OK
         : CAMERA_ENGINE_ERROR_PROCESS_FAILED;
+}
+
+CameraEngineStatus camera_engine_update_session_control(
+    CameraEngineContext* context,
+    const CameraEngineSessionControl* control
+) {
+    if (context == nullptr || !hasValidStructSize(control, control ? control->struct_size : 0)) {
+        return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(context->mutex);
+    context->sessionControl = toInternalControl(*control);
+    context->previewPipeline->updateSessionControl(context->sessionControl);
+    context->capturePipeline->updateSessionControl(context->sessionControl);
+    return CAMERA_ENGINE_OK;
+}
+
+CameraEngineStatus camera_engine_advise_capture(
+    CameraEngineContext* context,
+    const CameraEngineFrameMetadata* preview_metadata,
+    CameraEngineCaptureAdvice* advice
+) {
+    if (context == nullptr || preview_metadata == nullptr || advice == nullptr) {
+        return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(context->mutex);
+    const camera_engine::CaptureAdvice internal =
+        context->capturePipeline->adviseCapture(toInternalMetadata(*preview_metadata));
+    advice->burst_frame_count = static_cast<uint32_t>(internal.burstFrameCount);
+    advice->reason_flags = internal.reasonFlags;
+    return CAMERA_ENGINE_OK;
 }
 
 CameraEngineStatus camera_engine_set_algorithm_param(
@@ -328,14 +444,16 @@ CameraEngineStatus camera_engine_process_preview(
     CameraEnginePreviewResult* result
 ) {
     if (context == nullptr || frame == nullptr) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> contextLock(context->mutex);
     camera_engine::YuvFrame yuvFrame;
     if (!makeYuvFrame(frame, &yuvFrame)) return CAMERA_ENGINE_ERROR_UNSUPPORTED_FORMAT;
     const camera_engine::PreviewResult internalResult = context->previewPipeline->process(yuvFrame);
     if (result != nullptr) {
+        result->status = toPublicStatus(internalResult.status);
         result->face_count = 0;
         copyFaces(internalResult.faces, result);
     }
-    return CAMERA_ENGINE_OK;
+    return toPublicStatus(internalResult.status);
 }
 
 CameraEngineStatus camera_engine_process_capture(
@@ -345,6 +463,7 @@ CameraEngineStatus camera_engine_process_capture(
     CameraEngineCaptureResult* result
 ) {
     if (context == nullptr || frames == nullptr || frame_count == 0) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> contextLock(context->mutex);
     std::vector<camera_engine::YuvFrame> yuvFrames;
     yuvFrames.reserve(frame_count);
     for (uint32_t i = 0; i < frame_count; ++i) {
@@ -353,8 +472,13 @@ CameraEngineStatus camera_engine_process_capture(
         yuvFrames.push_back(yuvFrame);
     }
     const camera_engine::CaptureResult internalResult = context->capturePipeline->process(yuvFrames);
+    if (internalResult.status != camera_engine::ResultCode::OK) {
+        if (result != nullptr) result->status = toPublicStatus(internalResult.status);
+        return toPublicStatus(internalResult.status);
+    }
     if (internalResult.jpegData.empty()) return CAMERA_ENGINE_ERROR_PROCESS_FAILED;
     if (result != nullptr) {
+        result->status = CAMERA_ENGINE_OK;
         result->face_count = 0;
         if (!toJpegOutput(internalResult.jpegData, result->jpeg_output, &result->required_jpeg_capacity)) {
             return CAMERA_ENGINE_ERROR_BUFFER_TOO_SMALL;
@@ -365,5 +489,11 @@ CameraEngineStatus camera_engine_process_capture(
 
 CameraEngineStatus camera_engine_reset(CameraEngineContext* context) {
     if (context == nullptr) return CAMERA_ENGINE_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    // Release per-session algorithm state (face detector resources) and
+    // re-sync the session control so cached capture/preview state is cleared.
+    context->previewPipeline->releaseFaceDetector();
+    context->previewPipeline->updateSessionControl(context->sessionControl);
+    context->capturePipeline->updateSessionControl(context->sessionControl);
     return CAMERA_ENGINE_OK;
 }

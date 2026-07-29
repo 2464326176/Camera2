@@ -24,7 +24,6 @@ cv::Mat BokehEffect::apply(const cv::Mat& bgr, float centerX, float centerY,
     if (ksize % 2 == 0) ksize++;
     cv::GaussianBlur(bgr, blurred, cv::Size(ksize, ksize), blurStrength * 10);
 
-    cv::Mat mask(h, w, CV_32FC1);
     int cx = (int)(centerX * w);
     int cy = (int)(centerY * h);
     float rx = std::max(focusRadius * w, 1.0f);
@@ -54,7 +53,7 @@ cv::Mat BokehEffect::apply(const cv::Mat& bgr, float centerX, float centerY,
     bgr.convertTo(bgrFloat, CV_32FC3);
     blurred.convertTo(blurFloat, CV_32FC3);
 
-    std::vector<cv::Mat> maskChannels(3, mask);
+    std::vector<cv::Mat> maskChannels(3, weight);
     cv::Mat mask3;
     cv::merge(maskChannels, mask3);
 

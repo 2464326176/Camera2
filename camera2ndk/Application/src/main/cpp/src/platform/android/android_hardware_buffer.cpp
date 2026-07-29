@@ -15,12 +15,10 @@
 
 namespace camera_engine {
 
-// Runtime API level check
+// Runtime API level check. Uses a magic static so the device API level is
+// read exactly once in a thread-safe manner.
 static inline bool isApi26OrAbove() {
-    static int apiLevel = -1;
-    if (apiLevel < 0) {
-        apiLevel = android_get_device_api_level();
-    }
+    static const int apiLevel = android_get_device_api_level();
     return apiLevel >= 26;
 }
 
@@ -42,7 +40,17 @@ bool HardwareBufferRef::lock(AHardwareBuffer* buffer, uint64_t usage) {
     AHardwareBuffer_Desc desc;
     AHardwareBuffer_describe(buffer, &desc);
 
-    int ret = AHardwareBuffer_lock(buffer, usage, -1, nullptr, &m_data);
+    int ret = 0;
+    AHardwareBuffer_Planes planes{};
+    const bool canLockPlanes =
+        android_get_device_api_level() >= 29 &&
+        desc.format == AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+    if (canLockPlanes) {
+        ret = AHardwareBuffer_lockPlanes(
+            buffer, usage, -1, nullptr, &planes);
+    } else {
+        ret = AHardwareBuffer_lock(buffer, usage, -1, nullptr, &m_data);
+    }
     if (ret != 0) {
         LOGE("AHardwareBuffer_lock failed: %d", ret);
         return false;
@@ -54,22 +62,39 @@ bool HardwareBufferRef::lock(AHardwareBuffer* buffer, uint64_t usage) {
     height = (int)desc.height;
     format = (int)desc.format;
 
-    // YUV_420_888 plane layout (NV21 compatible)
-    // AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420 = 0x23 (commonly used for YUV_420_888)
-    if (desc.format == AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420) {
+    // API 29+ exposes the real YUV plane row/pixel strides.
+    if (canLockPlanes && planes.planeCount >= 3) {
+        yPlane.data = static_cast<uint8_t*>(planes.planes[0].data);
+        yPlane.rowStride = static_cast<int32_t>(planes.planes[0].rowStride);
+        yPlane.pixelStride = static_cast<int32_t>(planes.planes[0].pixelStride);
+        uPlane.data = static_cast<uint8_t*>(planes.planes[1].data);
+        uPlane.rowStride = static_cast<int32_t>(planes.planes[1].rowStride);
+        uPlane.pixelStride = static_cast<int32_t>(planes.planes[1].pixelStride);
+        vPlane.data = static_cast<uint8_t*>(planes.planes[2].data);
+        vPlane.rowStride = static_cast<int32_t>(planes.planes[2].rowStride);
+        vPlane.pixelStride = static_cast<int32_t>(planes.planes[2].pixelStride);
+    } else if (desc.format == AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420) {
+        // API 26-28 does not expose lockPlanes. Respect the allocation stride
+        // for Y and keep the legacy semiplanar fallback for compatibility.
         yPlane.data = static_cast<uint8_t*>(m_data);
-        yPlane.rowStride = (int)desc.width;
+        yPlane.rowStride = static_cast<int>(desc.stride);
         yPlane.pixelStride = 1;
 
-        // UV interleaved plane: stride aligned to width
-        int uvStride = desc.width;
-        uPlane.data = static_cast<uint8_t*>(m_data) + desc.width * desc.height;
+        const int uvStride = static_cast<int>(desc.stride);
+        uPlane.data = static_cast<uint8_t*>(m_data) + desc.stride * desc.height;
         uPlane.rowStride = uvStride;
         uPlane.pixelStride = 2;
 
         vPlane.data = uPlane.data + 1;
         vPlane.rowStride = uvStride;
         vPlane.pixelStride = 2;
+    } else {
+        // Neither the API 29+ plane API nor the semiplanar YUV fallback applies
+        // (e.g. an RGBA_8888 buffer). YuvFrame::isValid() would fail anyway, but
+        // we surface the problem explicitly instead of leaving null plane pointers.
+        LOGE("Unsupported HardwareBuffer format %d; cannot map YUV planes", format);
+        unlock();
+        return false;
     }
 
     LOGD("Locked buffer %dx%d fmt=%d", width, height, format);

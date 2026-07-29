@@ -23,6 +23,7 @@ typedef struct CameraEngineCreateInfo {
 
 typedef struct CameraEnginePreviewResult {
     uint32_t struct_size;
+    CameraEngineStatus status;
     CameraEngineFace* faces;
     uint32_t face_capacity;
     uint32_t face_count;
@@ -33,6 +34,7 @@ typedef struct CameraEnginePreviewResult {
 
 typedef struct CameraEngineCaptureResult {
     uint32_t struct_size;
+    CameraEngineStatus status;
     CameraEngineImageBuffer* output_image;
     CameraEngineMutableBuffer* jpeg_output;
     uint32_t required_jpeg_capacity;
@@ -46,6 +48,8 @@ typedef struct CameraEngineCaptureResult {
 void camera_engine_create_info_init(CameraEngineCreateInfo* info);
 void camera_engine_preview_config_init(CameraEnginePreviewConfig* config);
 void camera_engine_capture_config_init(CameraEngineCaptureConfig* config);
+void camera_engine_session_control_init(CameraEngineSessionControl* control);
+void camera_engine_capture_advice_init(CameraEngineCaptureAdvice* advice);
 void camera_engine_frame_metadata_init(CameraEngineFrameMetadata* metadata);
 void camera_engine_preview_result_init(CameraEnginePreviewResult* result);
 void camera_engine_capture_result_init(CameraEngineCaptureResult* result);
@@ -65,6 +69,17 @@ CameraEngineStatus camera_engine_configure_preview(
 CameraEngineStatus camera_engine_configure_capture(
     CameraEngineContext* context,
     const CameraEngineCaptureConfig* config
+);
+
+CameraEngineStatus camera_engine_update_session_control(
+    CameraEngineContext* context,
+    const CameraEngineSessionControl* control
+);
+
+CameraEngineStatus camera_engine_advise_capture(
+    CameraEngineContext* context,
+    const CameraEngineFrameMetadata* preview_metadata,
+    CameraEngineCaptureAdvice* advice
 );
 
 CameraEngineStatus camera_engine_set_algorithm_param(

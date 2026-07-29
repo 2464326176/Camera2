@@ -1,10 +1,6 @@
 package com.opencv.camera;
 
-/**
- * Frame metadata extracted from Camera2 CaptureResult, passed to the C++ layer
- * in sync with the frame data. Field names correspond one-to-one with the
- * C++ FrameMetadata struct.
- */
+/** Per-frame camera state paired with the image buffer sent to C++. */
 public class FrameMetadata {
     public long timestampNs;
     public int iso = 100;
@@ -14,12 +10,19 @@ public class FrameMetadata {
     public int aeState;
     public int afState;
     public int awbState;
+    public float focalLength;
+    public float focusDistance;
+    public int rotation;
+    public int lensFacing;
+    public int frameNumber;
+    public boolean approximate;
 
     public FrameMetadata() {}
 
-    public FrameMetadata(long timestampNs, int iso, long exposureTimeNs,
-                         int flashState, float lensAperture,
-                         int aeState, int afState, int awbState) {
+    public FrameMetadata(
+            long timestampNs, int iso, long exposureTimeNs,
+            int flashState, float lensAperture,
+            int aeState, int afState, int awbState) {
         this.timestampNs = timestampNs;
         this.iso = iso;
         this.exposureTimeNs = exposureTimeNs;

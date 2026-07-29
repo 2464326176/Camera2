@@ -13,70 +13,110 @@
 
 namespace camera_engine {
 
+CapturePipeline::CapturePipeline()
+    : m_algorithmManager(PipelineType::CAPTURE) {}
+
 /**
  * Stores capture configuration for the next still-image processing request.
  */
 ResultCode CapturePipeline::configure(const PipelineConfig& config) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_config = config;
+    m_control.jpegQuality = config.jpegQuality;
     return ResultCode::OK;
 }
 
 void CapturePipeline::enableAlgorithm(AlgorithmId id, bool enable) {
-    if (id == AlgorithmId::SHARPEN) {
-        m_sharpenEnabled = enable;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    switch (id) {
+        case AlgorithmId::DENOISE: m_control.preferDenoise = enable; break;
+        case AlgorithmId::SHARPEN: m_control.preferSharpen = enable; break;
+        case AlgorithmId::HDR: m_control.preferHdr = enable; break;
+        case AlgorithmId::CLAHE: m_control.preferClahe = enable; break;
+        case AlgorithmId::SATURATION: m_control.preferSaturation = enable; break;
+        case AlgorithmId::BOKEH: m_control.preferBokeh = enable; break;
+        default: break;
     }
 }
 
 void CapturePipeline::setAlgorithmParam(AlgorithmId id, const std::string& key, float value) {
-    if (id == AlgorithmId::SHARPEN) {
-        if (key == "strength") m_sharpenStrength = value;
-        else if (key == "radius") m_sharpenRadius = value;
+    (void) id;
+    if (key == "jpegQuality") {
+        m_control.jpegQuality = static_cast<int>(value);
     }
+}
+
+void CapturePipeline::updateSessionControl(const SessionControl& control) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_control = control;
+}
+
+CaptureAdvice CapturePipeline::adviseCapture(const FrameMetadata& metadata) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_decision.advise(m_control, metadata);
 }
 
 /**
  * Converts capture frames to BGR, applies enabled quality algorithms, and encodes JPEG output.
+ * Decision evaluation is performed before BGR conversion to avoid wasted work on skipped frames.
  */
 CaptureResult CapturePipeline::process(const std::vector<YuvFrame>& frames) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     CaptureResult result;
-    if (frames.empty()) return result;
+    if (frames.empty()) {
+        result.status = ResultCode::ERROR;
+        return result;
+    }
 
     // Extract ISO from first frame metadata
     int iso = frames[0].getMetadata().iso;
     result.iso = iso;
     result.timestampNs = frames[0].getMetadata().timestampNs;
 
-    // YUV to BGR conversion
+    // 1. YUV to BGR conversion (only when frame will actually be processed).
+    // Metadata is collected per successfully converted frame so that the
+    // metadata vector always stays in sync with bgrFrames.
     std::vector<cv::Mat> bgrFrames;
+    std::vector<FrameMetadata> metadata;
     bgrFrames.reserve(frames.size());
+    metadata.reserve(frames.size());
     for (const auto& frame : frames) {
         cv::Mat bgr = frame.toBgr();
         if (!bgr.empty()) {
             bgrFrames.push_back(bgr);
+            metadata.push_back(frame.getMetadata());
         }
     }
 
     if (bgrFrames.empty()) return result;
 
-    // Denoise
-    cv::Mat denoised;
-    if (bgrFrames.size() >= 2) {
-        denoised = Denoiser::denoiseMulti(bgrFrames, iso);
-    } else {
-        denoised = Denoiser::denoiseSingle(bgrFrames[0], iso);
+    // 2. Evaluate decision plan AFTER BGR conversion. The decision operates on
+    // the same frame set that will be processed.
+    const DecisionPlan plan = m_decision.evaluate(m_control, metadata);
+    if (plan.skipEntireFrame) {
+        result.status = ResultCode::FRAME_SKIPPED;
+        return result;
     }
 
-    if (denoised.empty()) {
-        denoised = bgrFrames[0];
-    }
+    const AlgorithmInitInfo initInfo{
+        m_config.assetDir, PipelineType::CAPTURE,
+        frames.front().getWidth(), frames.front().getHeight()};
+    result.status = m_algorithmManager.applyInit(plan.needInit, initInfo);
+    if (result.status != ResultCode::OK) return result;
 
-    // Sharpen (optional)
-    if (m_sharpenEnabled) {
-        denoised = Sharpener::sharpen(denoised, m_sharpenStrength, m_sharpenRadius);
-    }
+    AlgorithmContext context;
+    context.sourceFrames = std::move(bgrFrames);
+    context.image = context.sourceFrames.front();
+    context.metadata = std::move(metadata);
+    context.originalWidth = frames.front().getWidth();
+    context.originalHeight = frames.front().getHeight();
+    result.status = m_algorithmManager.execute(plan.stages, context);
+    m_algorithmManager.applyUninit(plan.needUninit);
+    if (result.status != ResultCode::OK || context.image.empty()) return result;
 
     // JPEG encode (BGR direct encode, skip NV21 intermediate step)
-    result.jpegData = JpegEncoder::encodeBgr(denoised, m_config.jpegQuality);
+    result.jpegData = JpegEncoder::encodeBgr(context.image, m_control.jpegQuality);
+    result.status = result.jpegData.empty() ? ResultCode::ERROR : ResultCode::OK;
     return result;
 }
 
