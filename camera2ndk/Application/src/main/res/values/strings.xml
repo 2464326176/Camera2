@@ -2,13 +2,26 @@
 <resources>
     <string name="app_name">OpenCV Camera</string>
     <string name="mode_photo">照片</string>
+    <string name="mode_portrait">人像</string>
     <string name="mode_video">视频</string>
+    <string name="mode_pro">专业</string>
+    <string name="pro_iso">ISO</string>
+    <string name="pro_shutter">快门</string>
+    <string name="pro_ev">EV</string>
+    <string name="pro_focus">对焦</string>
+    <string name="pro_wb">白平衡</string>
+    <string name="pro_auto">自动</string>
     <string name="flash_off">关</string>
     <string name="flash_on">开</string>
     <string name="flash_auto">自动</string>
     <string name="timer_off">关</string>
     <string name="timer_3s">3s</string>
     <string name="timer_10s">10s</string>
+    <string name="hdr_off">关</string>
+    <string name="hdr_on">开</string>
+    <string name="hdr_auto">自动</string>
+    <string name="ev_0">EV 0.0</string>
+    <string name="ae_af_locked">AE/AF LOCKED</string>
     <string name="permission_camera_rationale">需要相机权限才能使用拍照功能</string>
     <string name="permission_mic_rationale">录像需要麦克风权限</string>
     <string name="permission_storage_rationale">需要存储权限才能保存媒体</string>

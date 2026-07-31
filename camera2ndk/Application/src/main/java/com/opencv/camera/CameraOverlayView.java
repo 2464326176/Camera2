@@ -40,6 +40,9 @@ public class CameraOverlayView extends View {
     private boolean displayMirror;
     private float targetAspectRatio;
 
+    private boolean levelerEnabled = true;
+    private float horizonRoll = 0f;
+
     public CameraOverlayView(Context context) {
         this(context, null);
     }
@@ -133,6 +136,18 @@ public class CameraOverlayView extends View {
         }
     }
 
+    public void setLevelerEnabled(boolean enabled) {
+        if (levelerEnabled != enabled) {
+            levelerEnabled = enabled;
+            postInvalidateOnAnimation();
+        }
+    }
+
+    public void setRoll(float degrees) {
+        horizonRoll = degrees;
+        postInvalidateOnAnimation();
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -152,6 +167,7 @@ public class CameraOverlayView extends View {
         if (gridVisible) {
             drawGrid(canvas, width, height);
         }
+        drawLeveler(canvas, width, height);
         drawFaces(canvas);
     }
 
@@ -217,6 +233,33 @@ public class CameraOverlayView extends View {
             transform.mapRect(mapped);
             drawFaceCorners(canvas, mapped);
         }
+    }
+
+    private void drawLeveler(Canvas canvas, int w, int h) {
+        if (!levelerEnabled) return;
+        // Only surface the leveler when the device is noticeably tilted,
+        // so it stays out of the way during normal framing.
+        if (Math.abs(horizonRoll) <= 0.5f) return;
+
+        float cx = w / 2f;
+        float cy = h / 2f;
+        float len = Math.min(w, h) * 0.32f;
+
+        Paint ref = new Paint(gridPaint);
+        ref.setColor(Color.parseColor("#55FFFFFF"));
+        ref.setStrokeWidth(2f);
+        canvas.drawLine(cx - len, cy, cx + len, cy, ref);
+
+        boolean level = Math.abs(horizonRoll) < 2f;
+        Paint ind = new Paint(gridPaint);
+        ind.setColor(level ? Color.parseColor("#4CAF50") : Color.parseColor("#F44336"));
+        ind.setStrokeWidth(4f);
+        ind.setStrokeCap(Paint.Cap.ROUND);
+        canvas.save();
+        canvas.rotate(-horizonRoll, cx, cy);
+        canvas.drawLine(cx - len, cy, cx + len, cy, ind);
+        canvas.restore();
+        canvas.drawCircle(cx, cy, 3f, ind);
     }
 
     private void drawFaceCorners(Canvas canvas, RectF rect) {

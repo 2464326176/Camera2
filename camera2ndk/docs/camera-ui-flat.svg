@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 920" width="100%">
+  <rect width="680" height="920" fill="#0e0e12"/>
+
+  <text x="40" y="42" font-family="sans-serif" font-size="15" font-weight="500" fill="#e8e8ee">Camera UI — minimalist &amp; flat</text>
+  <text x="40" y="62" font-family="sans-serif" font-size="13" fill="#9a9aa6">Flat surfaces · thin line icons · generous whitespace · single accent · no gradient / no shadow</text>
+
+  <!-- phone: thin bezel, full-bleed flat preview -->
+  <rect x="210" y="78" width="260" height="794" rx="46" fill="#232a36"/>
+  <rect x="210" y="78" width="260" height="794" rx="46" fill="none" stroke="#2a2a30" stroke-width="1.5"/>
+
+  <!-- L2 top: floating line icons, no button backgrounds -->
+  <g fill="none" stroke="#e8e8ee" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M250 113 l-4 9 4 0 -2 6 7 -10 -4 0 2 -5 Z" stroke="#6ea8fe"/>
+    <circle cx="294" cy="121" r="9"/>
+    <circle cx="366" cy="121" r="9"/>
+    <circle cx="402" cy="121" r="9"/>
+    <circle cx="402" cy="121" r="3.5" fill="#e8e8ee" stroke="none"/>
+    <g stroke-width="1.4">
+      <circle cx="402" cy="121" r="6"/>
+      <line x1="402" y1="112" x2="402" y2="115"/><line x1="402" y1="127" x2="402" y2="130"/>
+      <line x1="393" y1="121" x2="396" y2="121"/><line x1="408" y1="121" x2="411" y2="121"/>
+    </g>
+  </g>
+  <text x="294" y="125" font-family="sans-serif" font-size="9" font-weight="500" fill="#6ea8fe" text-anchor="middle">HDR</text>
+  <text x="330" y="125" font-family="sans-serif" font-size="9" fill="#e8e8ee" text-anchor="middle">4:3</text>
+  <path d="M366 114 l1.8 3.8 4.1 .5 -3.1 2.9 .8 4 -3.7 -2 -3.7 2 .8 -4 -3.1 -2.9 4.1 -.5 Z" fill="#e8e8ee" stroke="none"/>
+
+  <!-- AI scene: minimal dot + label, no pill -->
+  <circle cx="318" cy="160" r="3.5" fill="#6ea8fe"/>
+  <text x="328" y="164" font-family="sans-serif" font-size="12" font-weight="500" fill="#ffffff">Portrait</text>
+  <text x="330" y="190" font-family="sans-serif" font-size="11" fill="#9a9aa6" text-anchor="middle">1×</text>
+
+  <!-- focus square: thin accent outline, corner ticks only -->
+  <rect x="306" y="392" width="68" height="68" rx="6" fill="none" stroke="#6ea8fe" stroke-width="1.5"/>
+  <g stroke="#6ea8fe" stroke-width="1.5">
+    <path d="M306 408 h-5 M306 444 h-5 M374 408 h5 M374 444 h5 M322 392 v-5 M358 392 v-5 M322 460 v5 M358 460 v5"/>
+  </g>
+
+  <!-- L5 mode tabs: plain text, selected = accent + underline -->
+  <text x="262" y="654" font-family="sans-serif" font-size="13" fill="#8a8a92" text-anchor="middle">Portrait</text>
+  <text x="340" y="654" font-family="sans-serif" font-size="13" font-weight="500" fill="#6ea8fe" text-anchor="middle">Photo</text>
+  <line x1="322" y1="662" x2="358" y2="662" stroke="#6ea8fe" stroke-width="2"/>
+  <text x="418" y="654" font-family="sans-serif" font-size="13" fill="#8a8a92" text-anchor="middle">Video</text>
+
+  <!-- L5 bottom: thumbnail (flat square) · shutter (clean ring) · flip (line icon) -->
+  <rect x="242" y="718" width="48" height="48" rx="10" fill="#2a3340" stroke="#6ea8fe" stroke-width="1.5"/>
+  <circle cx="340" cy="742" r="38" fill="none" stroke="#e8e8ee" stroke-width="2.5"/>
+  <circle cx="340" cy="742" r="30" fill="#e8e8ee"/>
+  <g fill="none" stroke="#e8e8ee" stroke-width="1.6" stroke-linecap="round">
+    <path d="M404 736 a10 10 0 1 1 3 7"/>
+    <path d="M424 748 a10 10 0 1 1 -3 -7"/>
+    <path d="M404 736 l0 5 5 0"/>
+    <path d="M424 748 l0 -5 -5 0"/>
+  </g>
+
+  <!-- principle legend -->
+  <text x="40" y="892" font-family="sans-serif" font-size="11" fill="#7a7a86">Full-bleed preview · icons float with whitespace (no containers) · one flat accent (#6ea8fe) only on active state · hierarchy by weight &amp; space, not by fill</text>
+</svg>

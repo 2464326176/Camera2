@@ -2,6 +2,7 @@ package com.opencv.camera;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -9,12 +10,18 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
 import android.graphics.drawable.BitmapDrawable;
 import android.hardware.HardwareBuffer;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.hardware.camera2.CameraMetadata;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaActionSound;
@@ -24,6 +31,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
 import android.view.GestureDetector;
 import android.view.HapticFeedbackConstants;
@@ -35,6 +43,7 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -55,6 +64,7 @@ import androidx.preference.PreferenceManager;
 import com.google.android.material.snackbar.Snackbar;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -94,11 +104,36 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private TextView btnAi;
     private TextView aspectRatioButton;
     private ImageView btnSettings;
+    private ImageView btnHdr;
+    private EvSliderView evSlider;
+    private TextView evLabel;
+    private TextView aeLockHint;
+
+    // Pro mode panel
+    private LinearLayout proPanel;
+    private LinearLayout proSliderRow;
+    private LinearLayout zoomPresets;
+    private HistogramView histogramView;
+    private ArcSliderView proArc;
+    private TextView proValue;
+    private TextView proAuto;
+    private TextView modePortrait;
+    private TextView modePro;
+    private TextView[] proChips = new TextView[5];
+    private int activeProParam = 0; // 0 none,1 iso,2 shutter,3 ev,4 focus,5 wb
+    private int awbCycleIndex = 0;
+    private long histogramLastTime = 0;
+    private float evStep = 1f / 3f; // actual EV step in stops, read from characteristics
+    private TextView hdrLabel;
+    private TextView zoomPreset1;
+    private TextView zoomPreset2;
+    private TextView zoomPreset5;
     private TextView isoLabel;
     private TextView zoomLabel;
     private TextView modePhoto;
     private TextView modeVideo;
     private View modeIndicator;
+    private boolean modeIndicatorInitialized = false;
     private LinearLayout recordingIndicator;
     private TextView recordingTime;
     private ConstraintLayout topBar;
@@ -115,12 +150,77 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
             faceBusy.set(false);
         }
     };
+    private static final long BURST_INTERVAL_MS = 800;
+    private final AtomicBoolean isLongPressCapturing = new AtomicBoolean(false);
+    private final Runnable burstCaptureRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isLongPressCapturing.get()) return;
+            if (cameraEngine == null || uiMode != CameraEngine.MODE_PHOTO) {
+                isLongPressCapturing.set(false);
+                return;
+            }
+            if (isCapturing) {
+                // Capture still in progress, retry shortly
+                mainHandler.postDelayed(this, 100);
+                return;
+            }
+            doCapture();
+            mainHandler.postDelayed(this, BURST_INTERVAL_MS);
+        }
+    };
     private MediaActionSound shutterSound;
+
+    private SensorManager sensorManager;
+    private Sensor gravitySensor;
+    private final float[] gravityValues = new float[3];
+    private final SensorEventListener levelerListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            if (event.sensor.getType() == Sensor.TYPE_GRAVITY
+                    || event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                System.arraycopy(event.values, 0, gravityValues, 0, 3);
+                updateRollFromGravity();
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
+    };
+
+    private void updateRollFromGravity() {
+        if (cameraOverlay == null) return;
+        float gx = gravityValues[0];
+        float gy = gravityValues[1];
+        int rotation = requireActivity().getWindowManager().getDefaultDisplay().getRotation();
+        float roll;
+        switch (rotation) {
+            case Surface.ROTATION_90:
+                roll = (float) Math.toDegrees(Math.atan2(-gy, -gx));
+                break;
+            case Surface.ROTATION_180:
+                roll = (float) Math.toDegrees(Math.atan2(-gx, gy));
+                break;
+            case Surface.ROTATION_270:
+                roll = (float) Math.toDegrees(Math.atan2(gy, gx));
+                break;
+            case Surface.ROTATION_0:
+            default:
+                roll = (float) Math.toDegrees(Math.atan2(gx, -gy));
+                break;
+        }
+        cameraOverlay.setRoll(roll);
+    }
 
     private static final int ASPECT_FULL = 0;
     private static final int ASPECT_1_1 = 1;
     private static final int ASPECT_16_9 = 2;
     private static final int ASPECT_4_3 = 3;
+
+    private static final int HDR_OFF = 0;
+    private static final int HDR_AUTO = 1;
+    private static final int HDR_ON = 2;
 
     private boolean isCapturing = false;
     private int timerSeconds = 0;
@@ -129,8 +229,11 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private boolean isGridVisible = false;
     private boolean faceDetectEnabled = true;
     private boolean shutterSoundEnabled = true;
+    private static final int MODE_PORTRAIT = 2;
+    private static final int MODE_PRO = 3;
     private int uiMode = CameraEngine.MODE_PHOTO;
     private int flashMode = CameraEngine.FLASH_OFF;
+    private int hdrMode = HDR_AUTO;
     private final CameraMediaStore cameraMediaStore = new CameraMediaStore();
     private long activePhotoCaptureId = 0L;
 
@@ -141,6 +244,9 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private int bottomBarPadL, bottomBarPadT, bottomBarPadR, bottomBarPadB;
 
     private float currentZoom = 1.0f;
+    private boolean scalingInProgress = false;
+    private long lastScaleEndTime = 0;
+    private boolean controlsShown = false;
     private long recordingStartElapsed = 0;
     private final Runnable recordingTick = new Runnable() {
         @Override
@@ -212,8 +318,11 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         btnAi = root.findViewById(R.id.btn_ai);
         aspectRatioButton = root.findViewById(R.id.aspect_ratio_button);
         btnSettings = root.findViewById(R.id.btn_settings);
+        btnHdr = root.findViewById(R.id.btn_hdr);
+        hdrLabel = root.findViewById(R.id.hdr_label);
         isoLabel = root.findViewById(R.id.iso_label);
         zoomLabel = root.findViewById(R.id.zoom_label);
+        sensorManager = (SensorManager) requireContext().getSystemService(Context.SENSOR_SERVICE);
 
         modePhoto = root.findViewById(R.id.mode_photo);
         modeVideo = root.findViewById(R.id.mode_video);
@@ -235,6 +344,23 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         bottomBarPadB = bottomBar.getPaddingBottom();
 
         btnShutter.setOnClickListener(v -> onShutterClick());
+        btnShutter.setOnLongClickListener(v -> {
+            if (uiMode != CameraEngine.MODE_PHOTO || isCapturing) return false;
+            if (cameraEngine == null) return false;
+            isLongPressCapturing.set(true);
+            btnShutter.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            mainHandler.post(burstCaptureRunnable);
+            return true;
+        });
+        btnShutter.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                if (isLongPressCapturing.getAndSet(false)) {
+                    mainHandler.removeCallbacks(burstCaptureRunnable);
+                }
+            }
+            return false;
+        });
         btnSwitchCamera.setOnClickListener(v -> onSwitchCamera());
         thumbnail.setOnClickListener(v -> onThumbnailClicked());
         btnFlash.setOnClickListener(v -> cycleFlash());
@@ -242,8 +368,52 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         btnAi.setOnClickListener(v -> toggleAiMode());
         aspectRatioButton.setOnClickListener(v -> cycleAspectRatio());
         btnSettings.setOnClickListener(v -> openSettings());
+        btnHdr.setOnClickListener(v -> cycleHdr());
+        zoomPreset1 = root.findViewById(R.id.zoom_preset_1);
+        zoomPreset2 = root.findViewById(R.id.zoom_preset_2);
+        zoomPreset5 = root.findViewById(R.id.zoom_preset_5);
+        zoomPreset1.setOnClickListener(v -> applyZoom(1f));
+        zoomPreset2.setOnClickListener(v -> applyZoom(2f));
+        zoomPreset5.setOnClickListener(v -> applyZoom(5f));
+        syncZoomPresets();
+
+        evSlider = root.findViewById(R.id.ev_slider);
+        evLabel = root.findViewById(R.id.ev_label);
+        aeLockHint = root.findViewById(R.id.ae_lock_hint);
+        evSlider.setOnEvChangeListener(value -> {
+            if (cameraEngine != null) {
+                cameraEngine.setExposureCompensation(value);
+            }
+            updateEvLabel(value);
+        });
+        updateEvLabel(cameraEngine != null ? cameraEngine.getExposureCompensation() : 0);
+        updateEvSliderVisibility();
+
+        // Pro panel bindings
+        proPanel = root.findViewById(R.id.pro_panel);
+        proSliderRow = root.findViewById(R.id.pro_slider_row);
+        histogramView = root.findViewById(R.id.histogram_view);
+        proArc = root.findViewById(R.id.pro_arc);
+        proValue = root.findViewById(R.id.pro_value);
+        proAuto = root.findViewById(R.id.pro_auto);
+        modePortrait = root.findViewById(R.id.mode_portrait);
+        modePro = root.findViewById(R.id.mode_pro);
+        proChips[0] = root.findViewById(R.id.pro_chip_iso);
+        proChips[1] = root.findViewById(R.id.pro_chip_shutter);
+        proChips[2] = root.findViewById(R.id.pro_chip_ev);
+        proChips[3] = root.findViewById(R.id.pro_chip_focus);
+        proChips[4] = root.findViewById(R.id.pro_chip_wb);
+        for (int i = 0; i < proChips.length; i++) {
+            final int idx = i + 1;
+            proChips[i].setOnClickListener(v -> selectProParam(idx));
+        }
+        proAuto.setOnClickListener(v -> applyProAuto());
+        proArc.setOnArcChangeListener((value, fromUser) -> onProArcChanged(value));
+        zoomPresets = root.findViewById(R.id.zoom_presets);
+
         updateAiModeUi();
         updateAspectRatioUi();
+        updateHdrUi();
     }
 
     private void applyWindowInsets(View root) {
@@ -334,10 +504,10 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         control.preferFaceDetect = faceDetectEnabled;
         control.preferDenoise = true;
         control.preferSharpen = true;
-        control.preferHdr = isAiEnabled;
+        control.preferHdr = hdrMode != HDR_OFF;
         control.preferClahe = isAiEnabled;
         control.preferSaturation = isAiEnabled;
-        control.preferBokeh = false;
+        control.preferBokeh = uiMode == MODE_PORTRAIT;
         control.jpegQuality = 95;
         control.analysisMaxSide = 320;
         return control;
@@ -430,6 +600,18 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                     cameraEngine.isFrontCamera());
             configureTransform(textureView.getWidth(), textureView.getHeight());
             animateControlsIn();
+            if (cameraEngine != null) {
+                Range<Integer> evRange = cameraEngine.getExposureCompensationRange();
+                if (evRange != null) {
+                    evSlider.setRange(evRange.getLower(), evRange.getUpper());
+                    evSlider.setProgress(cameraEngine.getExposureCompensation());
+                    updateEvLabel(cameraEngine.getExposureCompensation());
+                    evStep = cameraEngine.getExposureCompensationStep();
+                    if (cameraEngine.isAeLocked()) {
+                        cameraEngine.lockAe();
+                    }
+                }
+            }
         });
     }
 
@@ -454,6 +636,11 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     public void onAutoFocusComplete(boolean success) {
         mainHandler.post(() -> {
             if (focusRing.getVisibility() == View.VISIBLE) {
+                // Update focus ring color based on result: green for success, red for failure
+                int colorRes = success ? R.color.gc_face_rect : R.color.gc_shutter_recording;
+                focusRing.setColorFilter(
+                        ContextCompat.getColor(requireContext(), colorRes),
+                        PorterDuff.Mode.SRC_ATOP);
                 focusRing.animate()
                         .alpha(0f)
                         .setDuration(250)
@@ -529,6 +716,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
             if (image == null) return;
 
             if (!faceBusy.compareAndSet(false, true)) {
+                image.close();
                 return;
             }
             faceAcquired = true;
@@ -544,6 +732,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
 
             final int imgW = image.getWidth();
             final int imgH = image.getHeight();
+            updateHistogram(image, imgW, imgH);
             image.close();
             image = null;
 
@@ -593,6 +782,32 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         }
     };
 
+    private void updateHistogram(Image image, int w, int h) {
+        if (histogramView == null || uiMode != MODE_PRO) return;
+        long now = System.currentTimeMillis();
+        if (now - histogramLastTime < 80) return;
+        histogramLastTime = now;
+        try {
+            Image.Plane plane = image.getPlanes()[0];
+            ByteBuffer buf = plane.getBuffer();
+            int rowStride = plane.getRowStride();
+            int pixelStride = plane.getPixelStride();
+            int step = Math.max(1, (w * h) / 250000);
+            int[] hist = new int[256];
+            for (int y = 0; y < h; y += step) {
+                int rowOff = y * rowStride;
+                for (int x = 0; x < w; x += step) {
+                    int v = buf.get(rowOff + x * pixelStride) & 0xFF;
+                    hist[v]++;
+                }
+            }
+            final int[] fhist = hist;
+            mainHandler.post(() -> histogramView.setHistogram(fhist));
+        } catch (Exception e) {
+            Log.e(TAG, "updateHistogram failed", e);
+        }
+    }
+
     // ---------- Shutter / Capture ----------
 
     private void onShutterClick() {
@@ -611,6 +826,13 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         } else {
             doCapture();
         }
+    }
+
+    /**
+     * Public entry used by MainActivity to map hardware volume keys to a shutter press.
+     */
+    public void triggerVolumeShutter() {
+        onShutterClick();
     }
 
     private void toggleVideoRecording() {
@@ -1003,6 +1225,31 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         }
     }
 
+    private void cycleHdr() {
+        hdrMode = (hdrMode + 1) % 3;
+        updateHdrUi();
+        scheduleSessionControlUpdate();
+        bounce(btnHdr);
+    }
+
+    private void updateHdrUi() {
+        switch (hdrMode) {
+            case HDR_ON:
+                btnHdr.setImageResource(R.drawable.ic_hdr_on);
+                hdrLabel.setText(R.string.hdr_on);
+                break;
+            case HDR_AUTO:
+                btnHdr.setImageResource(R.drawable.ic_hdr_auto);
+                hdrLabel.setText(R.string.hdr_auto);
+                break;
+            case HDR_OFF:
+            default:
+                btnHdr.setImageResource(R.drawable.ic_hdr_off);
+                hdrLabel.setText(R.string.hdr_off);
+                break;
+        }
+    }
+
     private void openSettings() {
         if (cameraEngine != null && cameraEngine.isRecording()) return;
         getParentFragmentManager()
@@ -1140,12 +1387,15 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
 
     private void animateThumbnailUpdate() {
         thumbnail.animate()
-                .scaleX(0.85f).scaleY(0.85f)
-                .setDuration(90)
+                .scaleX(0.82f).scaleY(0.82f)
+                .rotation(2f)
+                .setDuration(110)
+                .setInterpolator(new DecelerateInterpolator())
                 .withEndAction(() -> thumbnail.animate()
                         .scaleX(1f).scaleY(1f)
-                        .setDuration(180)
-                        .setInterpolator(new OvershootInterpolator(2f))
+                        .rotation(0f)
+                        .setDuration(220)
+                        .setInterpolator(new OvershootInterpolator(1.6f))
                         .start())
                 .start();
     }
@@ -1154,7 +1404,16 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         GestureDetector gestureDetector = new GestureDetector(requireContext(),
                 new GestureDetector.SimpleOnGestureListener() {
                     @Override
+                    public boolean onDown(MotionEvent e) {
+                        return true;
+                    }
+
+                    @Override
                     public boolean onSingleTapUp(MotionEvent e) {
+                        if (cameraEngine != null && cameraEngine.isAeLocked()) {
+                            cameraEngine.unlockAe();
+                            aeLockHint.setVisibility(View.GONE);
+                        }
                         showFocusRing(e.getX(), e.getY());
                         if (cameraEngine != null) {
                             cameraEngine.focusOnPoint(
@@ -1163,10 +1422,66 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                         }
                         return true;
                     }
+
+                    @Override
+                    public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                        // Ignore flings that arrive while/after a pinch-zoom so lifting one
+                        // finger of a two-finger gesture can't accidentally switch mode.
+                        if (scalingInProgress) return false;
+                        if (e1 == null || e2 == null) return false;
+                        if (SystemClock.elapsedRealtime() - lastScaleEndTime < 250) return false;
+                        float dx = e2.getX() - e1.getX();
+                        float dy = e2.getY() - e1.getY();
+                        // Horizontal swipe switches capture mode; ignore diagonal gestures.
+                        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 80 && Math.abs(velocityX) > 300) {
+                            if (dx < 0) {
+                                selectMode(CameraEngine.MODE_VIDEO);
+                            } else {
+                                selectMode(CameraEngine.MODE_PHOTO);
+                            }
+                            btnShutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public boolean onDoubleTap(MotionEvent e) {
+                        if (cameraEngine == null) return false;
+                        float targetZoom = (Math.abs(currentZoom - 1f) < 0.2f) ? 2f : 1f;
+                        applyZoom(targetZoom);
+                        btnShutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                        return true;
+                    }
+
+                    @Override
+                    public void onLongPress(MotionEvent e) {
+                        showFocusRing(e.getX(), e.getY());
+                        if (cameraEngine != null) {
+                            cameraEngine.focusOnPoint(
+                                    e.getX(), e.getY(),
+                                    textureView.getWidth(), textureView.getHeight());
+                            cameraEngine.lockAe();
+                        }
+                        aeLockHint.setVisibility(View.VISIBLE);
+                        btnShutter.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                    }
                 });
 
         ScaleGestureDetector scaleDetector = new ScaleGestureDetector(requireContext(),
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override
+                    public boolean onScaleBegin(ScaleGestureDetector detector) {
+                        scalingInProgress = true;
+                        return true;
+                    }
+
+                    @Override
+                    public void onScaleEnd(ScaleGestureDetector detector) {
+                        scalingInProgress = false;
+                        lastScaleEndTime = SystemClock.elapsedRealtime();
+                    }
+
                     @Override
                     public boolean onScale(ScaleGestureDetector detector) {
                         if (cameraEngine == null) return false;
@@ -1178,6 +1493,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                         zoomLabel.setText(String.format(Locale.US, "%.1fx", currentZoom));
                         mainHandler.removeCallbacks(hideZoomLabel);
                         mainHandler.postDelayed(hideZoomLabel, 1200);
+                        syncZoomPresets();
                         return true;
                     }
                 });
@@ -1192,6 +1508,10 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     private void showFocusRing(float x, float y) {
         focusRing.setVisibility(View.VISIBLE);
         focusRing.setAlpha(1f);
+        // Reset to default focus ring color (yellow)
+        focusRing.setColorFilter(
+                ContextCompat.getColor(requireContext(), R.color.gc_focus_ring),
+                PorterDuff.Mode.SRC_ATOP);
         focusRing.setX(x - focusRing.getWidth() / 2f);
         focusRing.setY(y - focusRing.getHeight() / 2f);
         focusRing.setScaleX(1.4f);
@@ -1203,9 +1523,36 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                 .start();
     }
 
+    private void applyZoom(float z) {
+        if (cameraEngine == null) return;
+        cameraEngine.setZoom(z);
+        currentZoom = cameraEngine.getCurrentZoom();
+        zoomLabel.setVisibility(View.VISIBLE);
+        zoomLabel.setText(String.format(Locale.US, "%.1fx", currentZoom));
+        mainHandler.removeCallbacks(hideZoomLabel);
+        mainHandler.postDelayed(hideZoomLabel, 1200);
+        syncZoomPresets();
+    }
+
+    private void syncZoomPresets() {
+        float z = cameraEngine != null ? cameraEngine.getCurrentZoom() : currentZoom;
+        highlightPreset(zoomPreset1, Math.abs(z - 1f) < 0.15f);
+        highlightPreset(zoomPreset2, Math.abs(z - 2f) < 0.15f);
+        highlightPreset(zoomPreset5, Math.abs(z - 5f) < 0.15f);
+    }
+
+    private void highlightPreset(TextView view, boolean active) {
+        if (view == null) return;
+        int color = ContextCompat.getColor(requireContext(),
+                active ? R.color.gc_accent : R.color.gc_primary);
+        view.setTextColor(color);
+    }
+
     private void setupModeSelector() {
         modePhoto.setOnClickListener(v -> selectMode(CameraEngine.MODE_PHOTO));
+        modePortrait.setOnClickListener(v -> selectMode(MODE_PORTRAIT));
         modeVideo.setOnClickListener(v -> selectMode(CameraEngine.MODE_VIDEO));
+        modePro.setOnClickListener(v -> selectMode(MODE_PRO));
     }
 
     private void selectMode(int mode) {
@@ -1213,8 +1560,16 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         if (cameraEngine != null && cameraEngine.isRecording()) return;
         if (isCapturing) return;
 
-        Log.i(TAG, "Mode switch: " + (mode == CameraEngine.MODE_PHOTO ? "PHOTO" : "VIDEO"));
+        int prevMode = uiMode;
+        Log.i(TAG, "Mode switch: " + modeName(mode));
         uiMode = mode;
+        if (prevMode == MODE_PRO && cameraEngine != null) {
+            // Leaving Pro: restore auto exposure/focus/WB so other modes behave normally
+            cameraEngine.setAutoExposure();
+            cameraEngine.setAutoFocus();
+            cameraEngine.setWhiteBalance(CameraMetadata.CONTROL_AWB_MODE_AUTO);
+            awbCycleIndex = 0;
+        }
         updateModeUi();
         scheduleSessionControlUpdate();
 
@@ -1234,42 +1589,296 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         }
     }
 
+    private String modeName(int mode) {
+        switch (mode) {
+            case CameraEngine.MODE_PHOTO: return "PHOTO";
+            case MODE_PORTRAIT: return "PORTRAIT";
+            case CameraEngine.MODE_VIDEO: return "VIDEO";
+            case MODE_PRO: return "PRO";
+            default: return "?";
+        }
+    }
+
+    /**
+     * Animate the mode indicator to center under the active tab.
+     * Uses translationX instead of ConstraintLayout constraints because the mode tabs
+     * are inside a LinearLayout (mode_container), so ConstraintLayout
+     * cannot reliably constrain to them directly.
+     * On first call, the indicator is positioned immediately without animation.
+     */
+    private void animateModeIndicator(TextView activeTab) {
+        if (modeIndicator == null || activeTab == null) return;
+        modeIndicator.post(() -> {
+            // Compute the active tab's center X in window coordinates
+            int[] tabPos = new int[2];
+            activeTab.getLocationInWindow(tabPos);
+            if (tabPos[0] == 0 && activeTab.getWidth() == 0) {
+                // View not yet laid out, retry on next frame
+                modeIndicator.post(() -> animateModeIndicator(activeTab));
+                return;
+            }
+            float tabCenterX = tabPos[0] + activeTab.getWidth() / 2f;
+
+            // Compute the indicator's original (non-translated) center X in window coordinates
+            int[] indicatorPos = new int[2];
+            modeIndicator.getLocationInWindow(indicatorPos);
+            float indicatorOriginalCenterX =
+                    indicatorPos[0] + modeIndicator.getWidth() / 2f - modeIndicator.getTranslationX();
+
+            // Calculate how far we need to translate the indicator
+            float targetTranslationX = tabCenterX - indicatorOriginalCenterX;
+
+            if (!modeIndicatorInitialized) {
+                // First time: set position immediately, no animation
+                modeIndicator.setTranslationX(targetTranslationX);
+                modeIndicatorInitialized = true;
+            } else {
+                // Animate with smooth deceleration
+                modeIndicator.animate()
+                        .translationX(targetTranslationX)
+                        .setDuration(180)
+                        .setInterpolator(new DecelerateInterpolator(1.5f))
+                        .start();
+            }
+        });
+    }
+
     private void updateModeUi() {
         if (modePhoto == null) return;
-        if (uiMode == CameraEngine.MODE_PHOTO) {
-            modePhoto.setTextAppearance(R.style.ModeSelectorText_Selected);
-            modeVideo.setTextAppearance(R.style.ModeSelectorText);
-            btnShutter.setBackgroundResource(R.drawable.selector_shutter);
-            btnTimer.setVisibility(View.VISIBLE);
-            timerLabel.setVisibility(View.VISIBLE);
-            modeIndicator.post(() -> {
-                ConstraintLayout.LayoutParams lp =
-                        (ConstraintLayout.LayoutParams) modeIndicator.getLayoutParams();
-                lp.startToStart = modePhoto.getId();
-                lp.endToEnd = modePhoto.getId();
-                modeIndicator.setLayoutParams(lp);
-            });
-        } else {
-            modeVideo.setTextAppearance(R.style.ModeSelectorText_Selected);
-            modePhoto.setTextAppearance(R.style.ModeSelectorText);
-            btnShutter.setBackgroundResource(R.drawable.selector_shutter);
-            btnTimer.setVisibility(View.GONE);
-            timerLabel.setVisibility(View.GONE);
-            modeIndicator.post(() -> {
-                ConstraintLayout.LayoutParams lp =
-                        (ConstraintLayout.LayoutParams) modeIndicator.getLayoutParams();
-                lp.startToStart = modeVideo.getId();
-                lp.endToEnd = modeVideo.getId();
-                modeIndicator.setLayoutParams(lp);
-            });
+        TextView[] tabs = {modePhoto, modePortrait, modeVideo, modePro};
+        int[] modes = {CameraEngine.MODE_PHOTO, MODE_PORTRAIT, CameraEngine.MODE_VIDEO, MODE_PRO};
+        for (int i = 0; i < tabs.length; i++) {
+            tabs[i].setTextAppearance(uiMode == modes[i]
+                    ? R.style.ModeSelectorText_Selected : R.style.ModeSelectorText);
         }
+        TextView active = (uiMode == MODE_PORTRAIT) ? modePortrait
+                : (uiMode == CameraEngine.MODE_VIDEO) ? modeVideo
+                : (uiMode == MODE_PRO) ? modePro : modePhoto;
+        animateModeIndicator(active);
+
+        boolean isVideo = uiMode == CameraEngine.MODE_VIDEO;
+        btnTimer.setVisibility(isVideo ? View.GONE : View.VISIBLE);
+        if (timerLabel != null) timerLabel.setVisibility(isVideo ? View.GONE : View.VISIBLE);
+
+        boolean isPro = uiMode == MODE_PRO;
+        if (proPanel != null) proPanel.setVisibility(isPro ? View.VISIBLE : View.GONE);
+        if (zoomPresets != null) zoomPresets.setVisibility(isPro ? View.GONE : View.VISIBLE);
+        if (isPro && proChips != null) {
+            for (TextView chip : proChips) chip.setAlpha(1f);
+        }
+        if (!isPro) {
+            activeProParam = 0;
+            if (proSliderRow != null) proSliderRow.setVisibility(View.GONE);
+        }
+
         if (cameraEngine != null) {
             onIsoUpdated(cameraEngine.getCurrentIso());
+        }
+        if (uiMode != CameraEngine.MODE_PHOTO
+                && uiMode != MODE_PORTRAIT
+                && cameraEngine != null && cameraEngine.isAeLocked()) {
+            cameraEngine.unlockAe();
+            aeLockHint.setVisibility(View.GONE);
+        }
+        updateEvSliderVisibility();
+    }
+
+    private void updateEvSliderVisibility() {
+        if (evSlider == null) return;
+        // EV slider only visible in Photo and Portrait modes.
+        // Hidden in Video mode (no EV adjustment) and Pro mode (has dedicated EV chip).
+        boolean show = uiMode == CameraEngine.MODE_PHOTO || uiMode == MODE_PORTRAIT;
+        int vis = show ? View.VISIBLE : View.GONE;
+        evSlider.setVisibility(vis);
+        evLabel.setVisibility(vis);
+    }
+
+    // ---------- Pro mode panel ----------
+
+    private void selectProParam(int param) {
+        if (cameraEngine == null) return;
+        activeProParam = param;
+        proSliderRow.setVisibility(View.VISIBLE);
+        proArc.setEnabled(true);
+        for (TextView chip : proChips) {
+            chip.setAlpha(0.55f);
+        }
+        proChips[param - 1].setAlpha(1f);
+
+        switch (param) {
+            case 1: { // ISO
+                Range<Integer> r = cameraEngine.getIsoRange();
+                if (r != null) {
+                    proArc.setLogarithmic(true);
+                    proArc.setRange(r.getLower(), r.getUpper());
+                    proArc.setValue(cameraEngine.isManualExposure()
+                            ? cameraEngine.getManualIso() : cameraEngine.getCurrentIso());
+                }
+                proArc.setFormatter(v -> "ISO " + (int) Math.round(v));
+                break;
+            }
+            case 2: { // Shutter
+                Range<Long> r = cameraEngine.getShutterRange();
+                if (r != null) {
+                    proArc.setLogarithmic(true);
+                    proArc.setRange(r.getLower(), r.getUpper());
+                    proArc.setValue(cameraEngine.isManualExposure()
+                            ? cameraEngine.getManualShutterNs() : 33_333_333L);
+                }
+                proArc.setFormatter(v -> formatShutter((long) v));
+                break;
+            }
+            case 3: { // EV (only effective while AE is on)
+                Range<Integer> r = cameraEngine.getExposureCompensationRange();
+                if (r != null) {
+                    proArc.setLogarithmic(false);
+                    proArc.setRange(r.getLower(), r.getUpper());
+                    proArc.setValue(cameraEngine.getExposureCompensation());
+                }
+                proArc.setFormatter(v -> String.format(Locale.US, "EV %+.1f", v * evStep));
+                proArc.setEnabled(!cameraEngine.isManualExposure());
+                break;
+            }
+            case 4: { // Focus: 0 = infinity (far end), minFocusDistance = closest
+                float maxF = Math.max(cameraEngine.getMinimumFocusDistance(), 0.05f);
+                proArc.setLogarithmic(false);
+                proArc.setRange(0f, maxF); // 0 = infinity, maxF = closest focus
+                proArc.setValue(cameraEngine.isManualFocus()
+                        ? cameraEngine.getManualFocusDistance() : 0f);
+                proArc.setFormatter(v -> (v <= 0.01f) ? "∞" : String.format(Locale.US, "%.2f m", v));
+                break;
+            }
+            case 5: { // WB cycle
+                proSliderRow.setVisibility(View.GONE);
+                cycleWhiteBalance();
+                return;
+            }
+        }
+        updateProValueLabel();
+    }
+
+    private void onProArcChanged(double value) {
+        if (cameraEngine == null) return;
+        switch (activeProParam) {
+            case 1:
+                cameraEngine.setManualExposure((int) Math.round(value), cameraEngine.getManualShutterNs());
+                break;
+            case 2:
+                cameraEngine.setManualExposure(cameraEngine.getManualIso(), (long) value);
+                break;
+            case 3:
+                if (cameraEngine.isManualExposure()) { updateProValueLabel(); return; }
+                cameraEngine.setExposureCompensation((int) Math.round(value));
+                break;
+            case 4:
+                cameraEngine.setManualFocusDistance((float) value);
+                break;
+        }
+        updateProValueLabel();
+    }
+
+    private void applyProAuto() {
+        if (cameraEngine == null) return;
+        switch (activeProParam) {
+            case 1:
+            case 2:
+                cameraEngine.setAutoExposure();
+                break;
+            case 3:
+                cameraEngine.setExposureCompensation(0);
+                break;
+            case 4:
+                cameraEngine.setAutoFocus();
+                break;
+            case 5:
+                cameraEngine.setWhiteBalance(CameraMetadata.CONTROL_AWB_MODE_AUTO);
+                awbCycleIndex = 0;
+                proValue.setText(awbName(CameraMetadata.CONTROL_AWB_MODE_AUTO));
+                return;
+        }
+        selectProParam(activeProParam);
+        proValue.setText("自动");
+    }
+
+    private void cycleWhiteBalance() {
+        if (cameraEngine == null) return;
+        int[] modes = cameraEngine.getAvailableAwbModes();
+        if (modes.length == 0) return;
+        awbCycleIndex = (awbCycleIndex + 1) % modes.length;
+        int mode = modes[awbCycleIndex];
+        cameraEngine.setWhiteBalance(mode);
+        proValue.setText(awbName(mode));
+        for (TextView chip : proChips) chip.setAlpha(0.55f);
+        proChips[4].setAlpha(1f);
+        proSliderRow.setVisibility(View.GONE);
+    }
+
+    private void updateProValueLabel() {
+        if (proValue == null || cameraEngine == null) return;
+        switch (activeProParam) {
+            case 1:
+                proValue.setText("ISO " + (cameraEngine.isManualExposure()
+                        ? cameraEngine.getManualIso() : cameraEngine.getCurrentIso()));
+                break;
+            case 2:
+                proValue.setText(formatShutter(cameraEngine.isManualExposure()
+                        ? cameraEngine.getManualShutterNs() : 33_333_333L));
+                break;
+            case 3:
+                if (cameraEngine.isManualExposure()) {
+                    proValue.setText("手动曝光下无效");
+                    break;
+                }
+                proValue.setText(String.format(Locale.US, "EV %+.1f",
+                        cameraEngine.getExposureCompensation() * evStep));
+                break;
+            case 4:
+                float maxF = Math.max(cameraEngine.getMinimumFocusDistance(), 0.05f);
+                float d = cameraEngine.isManualFocus() ? cameraEngine.getManualFocusDistance() : 0f;
+                proValue.setText(d <= 0.01f ? "∞" : String.format(Locale.US, "%.2f m", d));
+                break;
+        }
+    }
+
+    private String formatShutter(long ns) {
+        if (ns <= 0) return "1/∞ s";
+        double sec = ns / 1_000_000_000.0;
+        if (sec >= 1.0) return String.format(Locale.US, "%.1f s", sec);
+        return "1/" + (int) Math.round(1.0 / sec) + " s";
+    }
+
+    private String awbName(int mode) {
+        switch (mode) {
+            case CameraMetadata.CONTROL_AWB_MODE_INCANDESCENT: return "白炽灯";
+            case CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT: return "日光";
+            case CameraMetadata.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT: return "阴天";
+            case CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT: return "荧光灯";
+            case CameraMetadata.CONTROL_AWB_MODE_WARM_FLUORESCENT: return "暖荧光";
+            case CameraMetadata.CONTROL_AWB_MODE_SHADE: return "阴影";
+            case CameraMetadata.CONTROL_AWB_MODE_TWILIGHT: return "黄昏";
+            default: return "自动";
+        }
+    }
+
+    private void updateEvLabel(int ev) {
+        if (evLabel != null) {
+            evLabel.setText(String.format(Locale.US, "EV %+.1f", ev * evStep));
         }
     }
 
     private void animateControlsIn() {
         if (topBar == null) return;
+        if (controlsShown) {
+            // Already shown (e.g. after a mode switch / returning from background):
+            // keep controls visible instead of re-fading, which would flicker.
+            topBar.setAlpha(1f);
+            bottomBar.setAlpha(1f);
+            modeContainer.setAlpha(1f);
+            topBar.setTranslationY(0f);
+            bottomBar.setTranslationY(0f);
+            return;
+        }
+        controlsShown = true;
         topBar.setAlpha(0f);
         bottomBar.setAlpha(0f);
         modeContainer.setAlpha(0f);
@@ -1343,6 +1952,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         super.onResume();
         Log.d(TAG, "onResume");
         applyPreferences();
+        registerLevelerSensor();
         if (textureView != null && textureView.isAvailable()) {
             openCameraWithPermission();
         }
@@ -1351,6 +1961,7 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
     @Override
     public void onPause() {
         Log.d(TAG, "onPause");
+        unregisterLevelerSensor();
         if (cameraEngine != null) {
             if (cameraEngine.isRecording()) {
                 cameraEngine.stopRecording();
@@ -1359,6 +1970,29 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
         }
         mainHandler.removeCallbacks(recordingTick);
         super.onPause();
+    }
+
+    private void registerLevelerSensor() {
+        if (sensorManager == null) {
+            sensorManager = (SensorManager) requireContext().getSystemService(Context.SENSOR_SERVICE);
+        }
+        if (sensorManager == null) return;
+        if (gravitySensor == null) {
+            gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY);
+            if (gravitySensor == null) {
+                gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            }
+        }
+        if (gravitySensor != null) {
+            sensorManager.registerListener(levelerListener, gravitySensor,
+                    SensorManager.SENSOR_DELAY_UI);
+        }
+    }
+
+    private void unregisterLevelerSensor() {
+        if (sensorManager != null) {
+            sensorManager.unregisterListener(levelerListener);
+        }
     }
 
     @Override

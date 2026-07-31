@@ -67,6 +67,13 @@ cd "$SAVED" >&-
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
+# Under Cygwin/MSYS the JVM is a native Windows binary and does not understand
+# POSIX paths, so convert the bootstrap classpath to a Windows path. This keeps
+# `./gradlew` working from Git Bash on Windows.
+if [ "$cygwin" = "true" -o "$msys" = "true" ] ; then
+    CLASSPATH=`cygpath --path --windows "$CLASSPATH"`
+fi
+
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
     if [ -x "$JAVA_HOME/jre/sh/java" ] ; then

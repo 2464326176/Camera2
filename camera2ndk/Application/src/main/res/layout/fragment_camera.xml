@@ -70,18 +70,18 @@
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/top_bar"
         android:layout_width="match_parent"
-        android:layout_height="80dp"
+        android:layout_height="68dp"
         android:clipToPadding="false"
         android:paddingStart="20dp"
-        android:paddingTop="10dp"
+        android:paddingTop="8dp"
         android:paddingEnd="20dp"
-        android:paddingBottom="8dp"
+        android:paddingBottom="6dp"
         app:layout_constraintTop_toTopOf="parent">
 
         <View
             android:id="@+id/top_gradient"
             android:layout_width="0dp"
-            android:layout_height="100dp"
+            android:layout_height="72dp"
             android:background="@drawable/bg_top_gradient"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
@@ -132,18 +132,38 @@
                     android:layout_gravity="bottom|center_horizontal"
                     android:text="@string/timer_off" />
             </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="52dp"
+                android:layout_height="56dp"
+                android:layout_marginStart="2dp">
+
+                <ImageView
+                    android:id="@+id/btn_hdr"
+                    style="@style/TopControlButton"
+                    android:layout_gravity="top|center_horizontal"
+                    android:src="@drawable/ic_hdr_off"
+                    tools:ignore="ContentDescription" />
+
+                <TextView
+                    android:id="@+id/hdr_label"
+                    style="@style/TopControlLabel"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:text="@string/hdr_auto" />
+            </FrameLayout>
         </LinearLayout>
 
         <TextView
             android:id="@+id/btn_ai"
             style="@style/TopControlTextButton"
+            android:background="@drawable/bg_ai_top_button"
             android:layout_width="wrap_content"
             android:minWidth="44dp"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:text="AI"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/top_right_group"
+            app:layout_constraintStart_toEndOf="@id/top_left_group"
             app:layout_constraintTop_toTopOf="parent" />
 
         <LinearLayout
@@ -220,7 +240,7 @@
         android:background="@drawable/bg_bottom_gradient"
         app:layout_constraintBottom_toBottomOf="parent" />
 
-    <!-- Mode selector: Photo / Video only -->
+    <!-- Mode selector: Photo / Portrait / Video / Pro -->
     <LinearLayout
         android:id="@+id/mode_container"
         android:layout_width="wrap_content"
@@ -237,17 +257,35 @@
             style="@style/ModeSelectorText.Selected"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="28dp"
+            android:layout_marginEnd="22dp"
             android:padding="10dp"
             android:text="@string/mode_photo" />
+
+        <TextView
+            android:id="@+id/mode_portrait"
+            style="@style/ModeSelectorText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="22dp"
+            android:padding="10dp"
+            android:text="@string/mode_portrait" />
 
         <TextView
             android:id="@+id/mode_video"
             style="@style/ModeSelectorText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="22dp"
             android:padding="10dp"
             android:text="@string/mode_video" />
+
+        <TextView
+            android:id="@+id/mode_pro"
+            style="@style/ModeSelectorText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="10dp"
+            android:text="@string/mode_pro" />
     </LinearLayout>
 
     <View
@@ -260,14 +298,62 @@
         app:layout_constraintEnd_toEndOf="@id/mode_photo"
         app:layout_constraintStart_toStartOf="@id/mode_photo" />
 
+    <!-- Zoom presets (1x / 2x / 5x) -->
+    <LinearLayout
+        android:id="@+id/zoom_presets"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="6dp"
+        android:gravity="center"
+        android:orientation="horizontal"
+        app:layout_constraintBottom_toTopOf="@id/mode_container"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/zoom_preset_1"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="14dp"
+            android:padding="4dp"
+            android:text="1×"
+            android:textColor="@color/gc_primary"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:ignore="ContentDescription" />
+
+        <TextView
+            android:id="@+id/zoom_preset_2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="14dp"
+            android:padding="4dp"
+            android:text="2×"
+            android:textColor="@color/gc_primary"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:ignore="ContentDescription" />
+
+        <TextView
+            android:id="@+id/zoom_preset_5"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="4dp"
+            android:text="5×"
+            android:textColor="@color/gc_primary"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:ignore="ContentDescription" />
+    </LinearLayout>
+
     <!-- Bottom bar -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/bottom_bar"
         android:layout_width="match_parent"
-        android:layout_height="110dp"
+        android:layout_height="100dp"
         android:paddingStart="28dp"
         android:paddingEnd="28dp"
-        android:paddingBottom="16dp"
+        android:paddingBottom="14dp"
         app:layout_constraintBottom_toBottomOf="parent">
 
         <FrameLayout
@@ -340,7 +426,7 @@
         android:paddingEnd="14dp"
         android:paddingBottom="10dp"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/mode_container"
+        app:layout_constraintBottom_toTopOf="@id/zoom_presets"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
@@ -378,19 +464,186 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+    <!-- Vertical EV slider (photo mode only) -->
+    <com.opencv.camera.EvSliderView
+        android:id="@+id/ev_slider"
+        android:layout_width="44dp"
+        android:layout_height="240dp"
+        android:layout_marginEnd="14dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
-    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+    <TextView
+        android:id="@+id/ev_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="4dp"
+        android:text="@string/ev_0"
+        android:textColor="@color/gc_primary"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@id/ev_slider"
+        app:layout_constraintEnd_toStartOf="@id/ev_slider" />
 
-    <androidx.constraintlayout.widget.Guideline android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+    <!-- AE/AF lock hint -->
+    <TextView
+        android:id="@+id/ae_lock_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_flash_options"
+        android:paddingStart="12dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="6dp"
+        android:text="@string/ae_af_locked"
+        android:textColor="#4CAF50"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/top_bar" />
 
-    <androidx.constraintlayout.widget.Barrier android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+    <!-- Pro mode panel: histogram + manual chips + curved slider -->
+    <LinearLayout
+        android:id="@+id/pro_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="20dp"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="6dp"
+        android:background="@drawable/bg_flash_options"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/mode_container"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
 
-    <androidx.constraintlayout.widget.Barrier android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
+        <com.opencv.camera.HistogramView
+            android:id="@+id/histogram_view"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginBottom="10dp" />
+
+        <LinearLayout
+            android:id="@+id/pro_chips"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/pro_chip_iso"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="11dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp"
+                android:text="@string/pro_iso"
+                android:textColor="@color/gc_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pro_chip_shutter"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="11dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp"
+                android:text="@string/pro_shutter"
+                android:textColor="@color/gc_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pro_chip_ev"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="11dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp"
+                android:text="@string/pro_ev"
+                android:textColor="@color/gc_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pro_chip_focus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="11dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp"
+                android:text="@string/pro_focus"
+                android:textColor="@color/gc_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pro_chip_wb"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="11dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp"
+                android:text="@string/pro_wb"
+                android:textColor="@color/gc_primary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/pro_slider_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <com.opencv.camera.ArcSliderView
+                android:id="@+id/pro_arc"
+                android:layout_width="56dp"
+                android:layout_height="220dp" />
+
+            <TextView
+                android:id="@+id/pro_value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_weight="1"
+                android:textColor="@color/gc_primary"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/pro_auto"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:background="@drawable/bg_flash_options"
+                android:paddingStart="14dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="8dp"
+                android:text="@string/pro_auto"
+                android:textColor="@color/gc_accent"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

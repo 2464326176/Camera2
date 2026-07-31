@@ -124,6 +124,16 @@ public class CameraEngine {
     private float maxDigitalZoom = 1f;
     private float currentZoom = 1f;
     private android.graphics.Rect sensorArraySize;
+    private int currentEvCompensation = 0;
+    private boolean aeLocked = false;
+
+    // Pro / manual controls
+    private int manualIso = 100;
+    private long manualShutterNs = 33_333_333L; // ~1/30s default
+    private float manualFocusDistance = 0f; // 0 = auto (continuous)
+    private int awbMode = CameraMetadata.CONTROL_AWB_MODE_AUTO;
+    private boolean manualExposure = false;
+    private boolean manualFocus = false;
 
     // Multi-frame capture
     private final Object burstLock = new Object();
@@ -346,6 +356,7 @@ public class CameraEngine {
         updateFlashModeLocked();
         updateFaceDetectModeLocked();
         applyZoomLocked();
+        applyManualControlsLocked();
     }
 
     /**
@@ -534,6 +545,7 @@ public class CameraEngine {
                 builder.set(CaptureRequest.CONTROL_AE_LOCK, true);
                 applyFlashToBuilder(builder, true);
                 applyZoomToBuilder(builder);
+                applyManualControlsToBuilder(builder);
                 requests.add(builder.build());
             }
 
@@ -923,6 +935,186 @@ public class CameraEngine {
                 centerX - deltaX, centerY - deltaY,
                 centerX + deltaX, centerY + deltaY);
         builder.set(CaptureRequest.SCALER_CROP_REGION, crop);
+    }
+
+    public int getExposureCompensation() {
+        return currentEvCompensation;
+    }
+
+    public Range<Integer> getExposureCompensationRange() {
+        if (cameraCharacteristics == null) return null;
+        return cameraCharacteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+    }
+
+    /**
+     * Actual EV step in stops (e.g. 1/3). Reads CONTROL_AE_COMPENSATION_STEP;
+     * falls back to 1/3 when unavailable so labels stay sane.
+     */
+    public float getExposureCompensationStep() {
+        if (cameraCharacteristics == null) return 1f / 3f;
+        android.util.Rational r =
+                cameraCharacteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+        if (r == null || r.getDenominator() == 0) return 1f / 3f;
+        return (float) r.getNumerator() / r.getDenominator();
+    }
+
+    public void setExposureCompensation(int value) {
+        Range<Integer> range = getExposureCompensationRange();
+        if (range != null) {
+            value = Math.max(range.getLower(), Math.min(value, range.getUpper()));
+        }
+        currentEvCompensation = value;
+        if (previewRequestBuilder == null || captureSession == null || !isSessionReady) return;
+        try {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, currentEvCompensation);
+            previewRequest = previewRequestBuilder.build();
+            captureSession.setRepeatingRequest(previewRequest, captureCallback, backgroundHandler);
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "setExposureCompensation: " + e.getMessage());
+        }
+    }
+
+    public void lockAe() {
+        aeLocked = true;
+        if (previewRequestBuilder == null || captureSession == null || !isSessionReady) return;
+        try {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_LOCK, true);
+            previewRequest = previewRequestBuilder.build();
+            captureSession.setRepeatingRequest(previewRequest, captureCallback, backgroundHandler);
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "lockAe: " + e.getMessage());
+        }
+    }
+
+    public void unlockAe() {
+        aeLocked = false;
+        if (previewRequestBuilder == null || captureSession == null || !isSessionReady) return;
+        try {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_LOCK, false);
+            previewRequest = previewRequestBuilder.build();
+            captureSession.setRepeatingRequest(previewRequest, captureCallback, backgroundHandler);
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "unlockAe: " + e.getMessage());
+        }
+    }
+
+    public boolean isAeLocked() {
+        return aeLocked;
+    }
+
+    // ---------- Pro / Manual controls ----------
+
+    public Range<Integer> getIsoRange() {
+        if (cameraCharacteristics == null) return null;
+        return cameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+    }
+
+    public Range<Long> getShutterRange() {
+        if (cameraCharacteristics == null) return null;
+        return cameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+    }
+
+    public float getMinimumFocusDistance() {
+        if (cameraCharacteristics == null) return 0.1f;
+        Float d = cameraCharacteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+        return d != null ? d : 0.1f;
+    }
+
+    public int[] getAvailableAwbModes() {
+        if (cameraCharacteristics == null) {
+            return new int[]{CameraMetadata.CONTROL_AWB_MODE_AUTO};
+        }
+        int[] modes = cameraCharacteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES);
+        return modes != null ? modes : new int[]{CameraMetadata.CONTROL_AWB_MODE_AUTO};
+    }
+
+    public void setManualExposure(int iso, long shutterNs) {
+        Range<Integer> isoR = getIsoRange();
+        if (isoR != null) iso = Math.max(isoR.getLower(), Math.min(iso, isoR.getUpper()));
+        Range<Long> shR = getShutterRange();
+        if (shR != null) shutterNs = Math.max(shR.getLower(), Math.min(shutterNs, shR.getUpper()));
+        manualIso = iso;
+        manualShutterNs = shutterNs;
+        manualExposure = true;
+        applyManualControls();
+    }
+
+    public void setAutoExposure() {
+        manualExposure = false;
+        applyManualControls();
+    }
+
+    public boolean isManualExposure() { return manualExposure; }
+    public int getManualIso() { return manualIso; }
+    public long getManualShutterNs() { return manualShutterNs; }
+
+    public void setManualFocusDistance(float distance) {
+        manualFocusDistance = Math.max(0f, distance);
+        manualFocus = true;
+        applyManualControls();
+    }
+
+    public void setAutoFocus() {
+        manualFocus = false;
+        applyManualControls();
+    }
+
+    public boolean isManualFocus() { return manualFocus; }
+    public float getManualFocusDistance() { return manualFocusDistance; }
+
+    public void setWhiteBalance(int mode) {
+        awbMode = mode;
+        applyManualControls();
+    }
+
+    public int getWhiteBalance() { return awbMode; }
+
+    private void applyManualControls() {
+        if (previewRequestBuilder == null) return;
+        applyManualControlsLocked();
+        if (captureSession != null && isSessionReady) {
+            try {
+                previewRequest = previewRequestBuilder.build();
+                captureSession.setRepeatingRequest(previewRequest, captureCallback, backgroundHandler);
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "applyManualControls: " + e.getMessage());
+            }
+        }
+    }
+
+    private void applyManualControlsLocked() {
+        if (previewRequestBuilder == null) return;
+        if (manualExposure) {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+            previewRequestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, manualIso);
+            previewRequestBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualShutterNs);
+            previewRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+        } else {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, currentEvCompensation);
+        }
+        previewRequestBuilder.set(CaptureRequest.CONTROL_AWB_MODE, awbMode);
+        if (manualFocus) {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+            previewRequestBuilder.set(CaptureRequest.LENS_FOCUS_DISTANCE, manualFocusDistance);
+        } else {
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+        }
+    }
+
+    private void applyManualControlsToBuilder(CaptureRequest.Builder builder) {
+        if (builder == null) return;
+        if (manualExposure) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, manualIso);
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, manualShutterNs);
+            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+        }
+        builder.set(CaptureRequest.CONTROL_AWB_MODE, awbMode);
+        if (manualFocus) {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+            builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, manualFocusDistance);
+        }
     }
 
     public void setFlashMode(int mode) {

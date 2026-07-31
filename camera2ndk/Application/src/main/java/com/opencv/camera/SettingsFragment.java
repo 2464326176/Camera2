@@ -1,7 +1,9 @@
 package com.opencv.camera;
 
 import android.content.SharedPreferences;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -59,21 +61,25 @@ public class SettingsFragment extends Fragment {
 
         LinearLayout header = new LinearLayout(requireContext());
         header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setPadding(dp(16), dp(8), dp(16), dp(16));
-        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(8), dp(8), dp(16), dp(20));
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
+        // Back button with arrow icon style
         TextView back = new TextView(requireContext());
-        back.setText("← Back");
-        back.setTextSize(16);
+        back.setText("⟵");
+        back.setTextSize(26);
         back.setTextColor(0xFFFFFFFF);
-        back.setPadding(dp(8), dp(8), dp(16), dp(8));
+        back.setGravity(Gravity.CENTER);
+        back.setPadding(dp(12), dp(8), dp(12), dp(8));
         back.setOnClickListener(v -> getParentFragmentManager().popBackStack());
         header.addView(back);
 
         TextView title = new TextView(requireContext());
         title.setText("Settings");
-        title.setTextSize(22);
+        title.setTextSize(20);
         title.setTextColor(0xFFFFFFFF);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setPadding(dp(4), 0, 0, 0);
         header.addView(title);
         root.addView(header);
 
@@ -102,7 +108,7 @@ public class SettingsFragment extends Fragment {
         LinearLayout item = new LinearLayout(requireContext());
         item.setOrientation(LinearLayout.HORIZONTAL);
         item.setPadding(dp(24), dp(16), dp(24), dp(16));
-        item.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        item.setGravity(Gravity.CENTER_VERTICAL);
 
         LinearLayout textContainer = new LinearLayout(requireContext());
         textContainer.setOrientation(LinearLayout.VERTICAL);
@@ -134,10 +140,13 @@ public class SettingsFragment extends Fragment {
         container.setOrientation(LinearLayout.VERTICAL);
         container.addView(item);
 
+        // Divider with optimized height and left margin for better visual hierarchy
         View divider = new View(requireContext());
         divider.setBackgroundColor(0x1AFFFFFF);
-        container.addView(divider, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        dividerParams.leftMargin = dp(24);
+        container.addView(divider, dividerParams);
 
         return container;
     }

@@ -2,6 +2,7 @@ package com.opencv.camera;
 
 import android.os.Build;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -60,5 +61,27 @@ public class MainActivity extends AppCompatActivity {
         if (hasFocus) {
             setupFullScreen();
         }
+    }
+
+    /**
+     * Route hardware volume keys to a physical shutter when the camera is active.
+     * Skipped while the settings sheet (back-stack) is open so volume still works there.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && event.getRepeatCount() == 0
+                && (event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_DOWN
+                    || event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_UP)) {
+            if (getSupportFragmentManager().getBackStackEntryCount() == 0) {
+                CameraFragment fragment = (CameraFragment) getSupportFragmentManager()
+                        .findFragmentById(R.id.container);
+                if (fragment != null && fragment.isVisible()) {
+                    fragment.triggerVolumeShutter();
+                    return true;
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 }
