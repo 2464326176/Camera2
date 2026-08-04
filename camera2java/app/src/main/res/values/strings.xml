@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Camera2 All-in-One</string>
+
+    <!-- Tab / mode labels -->
+    <string name="mode_photo">Photo</string>
+    <string name="mode_video">Video</string>
+    <string name="mode_raw">RAW</string>
+
+    <!-- Basic (photo) mode -->
+    <string name="picture">Picture</string>
+    <string name="capture_raw">Capture RAW</string>
+    <string name="description_info">Info</string>
+    <string name="request_permission">This app needs camera and storage permissions.</string>
+    <string name="camera_error">This device doesn\'t support Camera2 API.</string>
+    <string name="intro_message">Integrated Camera2 sample:\n\n• Photo: JPEG still capture\n• Video: MP4 recording\n• RAW: DNG + JPEG capture</string>
+
+    <!-- Video mode -->
+    <string name="record">Record</string>
+    <string name="stop">Stop</string>
+</resources>
