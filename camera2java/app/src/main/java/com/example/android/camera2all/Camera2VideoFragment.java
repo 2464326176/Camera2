@@ -125,6 +125,18 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
         @Override
         public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {
+            // === Algorithm pseudo-interface: video-frame processing (video preview frame callback) ===
+            // Call timing: every video preview frame arrives, before the render update (this is the
+            // TextureView update callback).
+            // Data flow: raw video frame (NV21) -> processVideoFrame() -> processed Bitmap (watermark/beauty)
+            // Threading: posted to the dedicated algorithm thread (mAlgorithmHandler) so it never
+            // blocks the main thread or the render pipeline.
+            if (mVideoFrameAlgorithm != null && mAlgorithmHandler != null && mPreviewSize != null) {
+                final long tsUs = System.nanoTime() / 1000; // mock timestamp (microseconds)
+                mAlgorithmHandler.post(() ->
+                        mVideoFrameAlgorithm.processVideoFrame(
+                                null, mPreviewSize.getWidth(), mPreviewSize.getHeight(), tsUs));
+            }
         }
 
     };
@@ -153,6 +165,16 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     private Handler mBackgroundHandler;
     // Guards open/close of the camera device so it cannot be opened twice or closed while in use.
     private Semaphore mCameraOpenCloseLock = new Semaphore(1);
+
+    // === Algorithm pseudo-interface hook (video-frame processing, mock) ===
+    // Video-frame algorithm: invoked in the video preview frame callback (onSurfaceTextureUpdated),
+    // executed on a dedicated thread so it does not block rendering.
+    private final CameraAlgorithm.VideoFrameAlgorithm mVideoFrameAlgorithm =
+            new CameraAlgorithm.MockVideoFrameAlgorithm();
+    // Dedicated thread for the video-frame algorithm: keeps processing off the main thread and
+    // the render pipeline.
+    private HandlerThread mAlgorithmThread;
+    private Handler mAlgorithmHandler;
 
     // Receives camera device open/close lifecycle events and drives the preview session.
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
@@ -255,6 +277,11 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     // Starts the background thread and opens the camera once the fragment is resumed/visible.
     public void onResume() {
         super.onResume();
+        // Start the video-frame algorithm dedicated thread (separate from the camera background
+        // thread to avoid blocking rendering).
+        mAlgorithmThread = new HandlerThread("VideoAlgorithm");
+        mAlgorithmThread.start();
+        mAlgorithmHandler = new Handler(mAlgorithmThread.getLooper());
         startBackgroundThread();
         if (mTextureView.isAvailable()) {
             openCamera(mTextureView.getWidth(), mTextureView.getHeight());
@@ -268,6 +295,17 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     public void onPause() {
         closeCamera();
         stopBackgroundThread();
+        // Stop the video-frame algorithm dedicated thread.
+        if (mAlgorithmThread != null) {
+            mAlgorithmThread.quitSafely();
+            try {
+                mAlgorithmThread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            mAlgorithmThread = null;
+            mAlgorithmHandler = null;
+        }
         super.onPause();
     }
 

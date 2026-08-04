@@ -1,9 +1,9 @@
 /*
  * Standalone settings page (replaces the old settings dialog).
  *
- * Three clearly separated sections - 预览 / 拍照 / 视频 - each expose a size and a
- * format selector. All selections are persisted via SettingsManager on "保存" and
- * reloaded on every entry ("读取"). "恢复默认" resets every preference to its default.
+ * Three clearly separated sections - Preview / Capture / Video - each expose a size and a
+ * format selector. All selections are persisted via SettingsManager on "Save" and
+ * reloaded on every entry ("Load"). "Reset to defaults" resets every preference to its default.
  */
 
 package com.example.android.camera2all;

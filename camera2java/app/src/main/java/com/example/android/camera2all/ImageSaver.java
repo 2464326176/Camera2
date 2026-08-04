@@ -17,6 +17,7 @@
 package com.example.android.camera2all;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.DngCreator;
@@ -32,6 +33,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * A {@link Runnable} that saves a {@link Image} (JPEG or RAW_SENSOR) to a {@link File} and
@@ -44,6 +47,22 @@ public class ImageSaver implements Runnable {
 
     // Log tag for the image-saver task.
     private static final String TAG = "ImageSaver";
+
+    // === Algorithm pseudo-interface hook (multi-frame / burst post-processing, mock) ===
+    // Call timing: post-capture processing stage, running on the background thread that hosts
+    // this Runnable (AsyncTask thread pool).
+    // Data flow: Bitmap frame list of this save -> processBurst() -> simulated composite Bitmap (HDR preview).
+    // Replace with a real implementation when integrating; defaults to mock.
+    private static CameraAlgorithm.MultiFrameAlgorithm sMultiFrameAlgorithm =
+            new CameraAlgorithm.MockMultiFrameAlgorithm();
+
+    /**
+     * Set the multi-frame algorithm implementation (pseudo-interface hook).
+     * Called by the host Fragment during initialization.
+     */
+    public static void setMultiFrameAlgorithm(CameraAlgorithm.MultiFrameAlgorithm algo) {
+        sMultiFrameAlgorithm = algo;
+    }
 
     // The captured image buffer to be saved.
     private final Image mImage;
@@ -129,6 +148,22 @@ public class ImageSaver implements Runnable {
                 mReader.close();
             } catch (Exception e) {
                 Log.e(TAG, "Error releasing ImageReader reference: " + e.getMessage());
+            }
+        }
+
+        // === Algorithm pseudo-interface: multi-frame processing (post-capture, background) ===
+        // In the success path, hand the just-saved frame to the multi-frame algorithm as one
+        // frame of a "burst batch". A real burst should aggregate multiple Images before
+        // calling processBurst.
+        if (success && sMultiFrameAlgorithm != null) {
+            try {
+                // Mock: build a single placeholder Bitmap list to simulate burst-batch input.
+                List<Bitmap> burst = Collections.singletonList(
+                        Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888));
+                Bitmap hdrPreview = sMultiFrameAlgorithm.processBurst(burst);
+                Log.i(TAG, "MultiFrameAlgorithm.processBurst done, mock HDR preview=" + hdrPreview);
+            } catch (Exception e) {
+                Log.e(TAG, "MultiFrameAlgorithm error: " + e.getMessage());
             }
         }
 

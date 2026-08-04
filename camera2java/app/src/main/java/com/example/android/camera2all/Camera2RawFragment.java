@@ -138,11 +138,25 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
         }
 
         @Override
-        // Called for every new preview frame; no action needed here.
+        // Called for every new preview frame; invokes the single-frame algorithm here (preview
+        // frame processing before the UI render).
         public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            // === Algorithm pseudo-interface: single-frame processing (preview frame callback) ===
+            // Call timing: every preview frame arrives, before the TextureView render update
+            // (runs on the camera background thread).
+            // Data flow: preview frame (NV21) -> processFrame() -> processed Bitmap
+            if (mSingleFrameAlgorithm != null && mPreviewSize != null) {
+                mSingleFrameAlgorithm.processFrame(
+                        null, mPreviewSize.getWidth(), mPreviewSize.getHeight());
+            }
         }
 
     };
+
+    // === Algorithm pseudo-interface hooks (mock, no real algorithm integrated) ===
+    // Single-frame algorithm: invoked in the preview frame callback, completes before the UI render.
+    private final CameraAlgorithm.SingleFrameAlgorithm mSingleFrameAlgorithm =
+            new CameraAlgorithm.MockSingleFrameAlgorithm();
 
     // Custom TextureView that keeps a correct aspect ratio for the camera preview.
     private AutoFitTextureView mTextureView;

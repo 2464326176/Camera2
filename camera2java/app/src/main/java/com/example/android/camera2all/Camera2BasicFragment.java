@@ -21,6 +21,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Point;
@@ -123,11 +124,33 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         }
 
         @Override
-        // Called for every new preview frame; no action needed here.
+        // Called for every new preview frame; invokes the single-frame algorithm here (preview
+        // frame processing before the UI render).
         public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            // === Algorithm pseudo-interface: single-frame processing (preview frame callback) ===
+            // Call timing: every preview frame arrives, before the TextureView render update.
+            // Data flow: preview frame (NV21 / placeholder here) -> processFrame() -> processed Bitmap
+            // Threading: currently runs on the camera background thread (SurfaceTexture frame callback).
+            if (mSingleFrameAlgorithm != null && mPreviewSize != null) {
+                // The mock does not hold a real NV21 buffer; null is used as a placeholder for the
+                // "raw frame", replace it with YUV pulled from the SurfaceTexture on real integration.
+                // The returned Bitmap can overwrite/composite before the UI render.
+                Bitmap processed = mSingleFrameAlgorithm.processFrame(
+                        null, mPreviewSize.getWidth(), mPreviewSize.getHeight());
+                // `processed` is the result "completed before the UI render" (mock returns a
+                // placeholder Bitmap; it does not participate in the actual render).
+            }
         }
 
     };
+
+    // === Algorithm pseudo-interface hooks (mock, no real algorithm integrated) ===
+    // Single-frame algorithm: invoked in the preview frame callback, completes before the UI render.
+    private final CameraAlgorithm.SingleFrameAlgorithm mSingleFrameAlgorithm =
+            new CameraAlgorithm.MockSingleFrameAlgorithm();
+    // Multi-frame algorithm: invoked in the post-capture processing stage, runs on a background thread.
+    private final CameraAlgorithm.MultiFrameAlgorithm mMultiFrameAlgorithm =
+            new CameraAlgorithm.MockMultiFrameAlgorithm();
 
     // Id of the back-facing camera chosen for this fragment.
     private String mCameraId;
