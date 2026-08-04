@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 预览尺寸 -->
+    <string-array name="preview_size_entries">
+        <item>自动 (跟随相机)</item>
+        <item>320×240</item>
+        <item>640×360</item>
+        <item>640×480</item>
+        <item>1280×720</item>
+        <item>1920×1080</item>
+    </string-array>
+    <string-array name="preview_size_values">
+        <item>auto</item>
+        <item>320x240</item>
+        <item>640x360</item>
+        <item>640x480</item>
+        <item>1280x720</item>
+        <item>1920x1080</item>
+    </string-array>
+
+    <!-- 预览格式（像素/表面格式） -->
+    <string-array name="preview_format_entries">
+        <item>默认 (SurfaceTexture)</item>
+        <item>YUV_420_888</item>
+        <item>PRIVATE</item>
+        <item>RGB_565</item>
+    </string-array>
+    <string-array name="preview_format_values">
+        <item>auto</item>
+        <item>yuv420888</item>
+        <item>private</item>
+        <item>rgb565</item>
+    </string-array>
+
+    <!-- 拍照尺寸 -->
+    <string-array name="photo_size_entries">
+        <item>自动 (最大)</item>
+        <item>1280×720</item>
+        <item>1920×1080</item>
+        <item>2560×1440</item>
+        <item>3264×2448</item>
+        <item>4032×3024</item>
+    </string-array>
+    <string-array name="photo_size_values">
+        <item>auto</item>
+        <item>1280x720</item>
+        <item>1920x1080</item>
+        <item>2560x1440</item>
+        <item>3264x2448</item>
+        <item>4032x3024</item>
+    </string-array>
+
+    <!-- 拍照（图片）格式 -->
+    <string-array name="photo_format_entries">
+        <item>JPEG</item>
+        <item>JPEG + DNG</item>
+        <item>DNG (RAW)</item>
+    </string-array>
+    <string-array name="photo_format_values">
+        <item>jpeg</item>
+        <item>jpeg_dng</item>
+        <item>dng</item>
+    </string-array>
+
+    <!-- 视频尺寸 -->
+    <string-array name="video_size_entries">
+        <item>自动</item>
+        <item>640×480</item>
+        <item>1280×720</item>
+        <item>1920×1080</item>
+        <item>3840×2160</item>
+    </string-array>
+    <string-array name="video_size_values">
+        <item>auto</item>
+        <item>640x480</item>
+        <item>1280x720</item>
+        <item>1920x1080</item>
+        <item>3840x2160</item>
+    </string-array>
+
+    <!-- 视频格式（封装/编码） -->
+    <string-array name="video_format_entries">
+        <item>MP4 · H.264 + AAC</item>
+        <item>MP4 · HEVC + AAC</item>
+        <item>WebM · VP8 + Vorbis</item>
+    </string-array>
+    <string-array name="video_format_values">
+        <item>mp4_h264</item>
+        <item>mp4_hevc</item>
+        <item>webm_vp8</item>
+    </string-array>
+
+</resources>

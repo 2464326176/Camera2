@@ -12,11 +12,21 @@
 
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="112dp"
         android:layout_alignParentBottom="true"
         android:layout_alignParentStart="true"
-        android:layout_below="@id/texture"
         android:background="#4285f4">
+
+        <ImageButton
+            android:id="@+id/thumbnail"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="16dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/description_thumbnail"
+            android:scaleType="centerCrop"
+            android:src="@android:drawable/ic_menu_gallery" />
 
         <Button
             android:id="@+id/video"
@@ -26,14 +36,15 @@
             android:text="@string/record" />
 
         <ImageButton
-            android:id="@+id/info"
-            android:contentDescription="@string/description_info"
-            style="@android:style/Widget.Material.Light.Button.Borderless"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_vertical|end"
-            android:padding="20dp"
-            android:src="@drawable/ic_action_info" />
+            android:id="@+id/reverse"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="16dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/description_reverse"
+            android:src="@drawable/ic_reverse"
+            android:tint="#FFFFFF" />
 
     </FrameLayout>
 

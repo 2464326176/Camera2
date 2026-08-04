@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="control_background">#cc4285f4</color>
+    <!-- Status bar colour for the (non-fullscreen) settings page. -->
+    <color name="settings_status_bar">#212121</color>
+    <!-- Toolbar background, kept consistent with the main activity top bar. -->
+    <color name="settings_toolbar_bg">#212121</color>
+    <!-- Accent used by the primary "保存" button. -->
+    <color name="settings_accent">#2962FF</color>
+    <!-- Page background (light theme). -->
+    <color name="settings_page_bg">#F5F5F5</color>
+    <!-- Card surface. -->
+    <color name="settings_card_bg">#FFFFFF</color>
+    <!-- Primary text on the light settings page. -->
+    <color name="settings_text_primary">#212121</color>
+    <!-- Secondary / hint text. -->
+    <color name="settings_text_secondary">#757575</color>
+
+    <!-- Bottom control bar background (pre-existing reference in the photo fragment layout). -->
+    <color name="control_background">#212121</color>
 </resources>

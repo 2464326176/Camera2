@@ -36,6 +36,7 @@ import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.util.Log;
 import android.util.Size;
 import android.util.SparseIntArray;
@@ -45,6 +46,7 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.Toast;
 
 import androidx.fragment.app.Fragment;
@@ -62,7 +64,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Camera2Video: MP4 video recording using MediaRecorder + Camera2 surfaces.
  */
-public class Camera2VideoFragment extends Fragment implements View.OnClickListener {
+public class Camera2VideoFragment extends Fragment implements View.OnClickListener, FlashControl {
 
     // Sensor orientation (degrees) used when the device is NOT in the inverse rotation case.
     private static final int SENSOR_ORIENTATION_DEFAULT_DEGREES = 90;
@@ -135,6 +137,16 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     private MediaRecorder mMediaRecorder;
     // True while a video recording is in progress.
     private boolean mIsRecordingVideo;
+    // Current lens facing (back or front); toggled by the reverse button.
+    private int mCurrentFacing = CameraCharacteristics.LENS_FACING_BACK;
+    // Selected flash mode, synced from the top-bar flash button via FlashControl.
+    private int mFlashMode = FlashControl.FLASH_AUTO;
+    // Whether the selected camera supports flash.
+    private boolean mFlashSupported;
+    // Thumbnail button showing the last recorded video; click opens the full clip.
+    private ImageButton mThumbnail;
+    // Most recently recorded video file, used by the thumbnail button.
+    private File mLastVideoFile;
     // Background thread that handles camera callbacks off the UI thread.
     private HandlerThread mBackgroundThread;
     // Handler bound to the background thread's looper.
@@ -181,6 +193,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     private Integer mSensorOrientation;
     // Absolute filesystem path for the next video file to be recorded.
     private String mNextVideoAbsolutePath;
+    // Resolved video-format key actually used for the current recording (after device fallback).
+    private String mVideoFormatResolved = SettingsManager.DEF_VIDEO_FORMAT;
     // Builder for the repeating preview capture request.
     private CaptureRequest.Builder mPreviewBuilder;
 
@@ -227,12 +241,14 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     }
 
     @Override
-    // Wires up the record/info buttons and caches the preview TextureView after the view is created.
+    // Wires up the record/reverse/thumbnail buttons and caches the preview TextureView.
     public void onViewCreated(final View view, Bundle savedInstanceState) {
         mTextureView = view.findViewById(R.id.texture);
         mButtonVideo = view.findViewById(R.id.video);
         mButtonVideo.setOnClickListener(this);
-        view.findViewById(R.id.info).setOnClickListener(this);
+        mThumbnail = view.findViewById(R.id.thumbnail);
+        mThumbnail.setOnClickListener(this);
+        view.findViewById(R.id.reverse).setOnClickListener(this);
     }
 
     @Override
@@ -256,7 +272,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     }
 
     @Override
-    // Handles the record button (toggles recording) and the info button (shows help dialog).
+    // Handles the record button (toggles recording), the reverse button (switches camera) and the
+    // thumbnail button (opens the last recorded video).
     public void onClick(View view) {
         switch (view.getId()) {
             case R.id.video: {
@@ -267,14 +284,12 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
                 }
                 break;
             }
-            case R.id.info: {
-                androidx.fragment.app.FragmentActivity activity = getActivity();
-                if (null != activity) {
-                    new AlertDialog.Builder(activity)
-                            .setMessage(R.string.intro_message)
-                            .setPositiveButton(android.R.string.ok, null)
-                            .show();
-                }
+            case R.id.reverse: {
+                switchCamera();
+                break;
+            }
+            case R.id.thumbnail: {
+                CameraUtils.openMedia(getActivity(), mLastVideoFile, true);
                 break;
             }
         }
@@ -351,18 +366,35 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
                 throw new RuntimeException("Time out waiting to lock camera opening.");
             }
-            String cameraId = manager.getCameraIdList()[0];
+            String cameraId = CameraUtils.chooseCameraId(manager, mCurrentFacing);
+            if (cameraId == null) {
+                throw new RuntimeException("No camera available");
+            }
 
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
             StreamConfigurationMap map = characteristics
                     .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             mSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            Boolean flashAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+            mFlashSupported = flashAvailable != null && flashAvailable;
             if (map == null) {
                 throw new RuntimeException("Cannot get available preview/video sizes");
             }
-            mVideoSize = chooseVideoSize(map.getOutputSizes(MediaRecorder.class));
+            // Honour the user-configured video size when supported; else use the original 4:3 pick.
+            Size videoPref = SettingsManager.pickSize(map.getOutputSizes(MediaRecorder.class),
+                    SettingsManager.getVideoSize(activity));
+            mVideoSize = (videoPref != null) ? videoPref
+                    : chooseVideoSize(map.getOutputSizes(MediaRecorder.class));
+
             mPreviewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class),
                     width, height, mVideoSize);
+
+            // Honour the user-configured preview size when supported by the device.
+            Size previewPref = SettingsManager.pickSize(map.getOutputSizes(SurfaceTexture.class),
+                    SettingsManager.getPreviewSize(activity));
+            if (previewPref != null) {
+                mPreviewSize = previewPref;
+            }
 
             int orientation = getResources().getConfiguration().orientation;
             if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
@@ -414,6 +446,12 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             SurfaceTexture texture = mTextureView.getSurfaceTexture();
             assert texture != null;
             texture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+
+            MainActivity main = (MainActivity) getActivity();
+            if (main != null) {
+                mFlashMode = main.getFlashMode();
+            }
+
             mPreviewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
 
             Surface previewSurface = new Surface(texture);
@@ -454,9 +492,76 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         }
     }
 
-    // Applies common preview capture-request settings (e.g. continuous AF mode).
+    // Applies common preview capture-request settings (e.g. continuous AF mode and flash mode).
     private void setUpCaptureRequestBuilder(CaptureRequest.Builder builder) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+        applyFlashMode(builder, false);
+    }
+
+    // Applies the current flash mode to a capture request builder. isCapture=true forces the flash
+    // (torch during recording); the preview request uses auto-flash for "on".
+    private void applyFlashMode(CaptureRequest.Builder requestBuilder, boolean isCapture) {
+        if (!mFlashSupported) {
+            return;
+        }
+        switch (mFlashMode) {
+            case FlashControl.FLASH_OFF:
+                requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON);
+                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                break;
+            case FlashControl.FLASH_ON:
+                if (isCapture) {
+                    requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                            CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH);
+                    requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE);
+                } else {
+                    requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                            CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                }
+                break;
+            default: // AUTO
+                requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                break;
+        }
+    }
+
+    // FlashControl: the top-bar flash button routes its mode here while this fragment is active.
+    @Override
+    public void setFlashMode(int mode) {
+        mFlashMode = mode;
+        if (mPreviewBuilder != null && mPreviewSession != null && mFlashSupported) {
+            applyFlashMode(mPreviewBuilder, false);
+            try {
+                mPreviewSession.setRepeatingRequest(mPreviewBuilder.build(), null, mBackgroundHandler);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public int getFlashMode() {
+        return mFlashMode;
+    }
+
+    @Override
+    public boolean isFlashSupported() {
+        return mFlashSupported;
+    }
+
+    // Toggles between the front and back camera and reopens the device.
+    private void switchCamera() {
+        mCurrentFacing = (mCurrentFacing == CameraCharacteristics.LENS_FACING_BACK)
+                ? CameraCharacteristics.LENS_FACING_FRONT
+                : CameraCharacteristics.LENS_FACING_BACK;
+        closeCamera();
+        if (mTextureView.isAvailable()) {
+            openCamera(mTextureView.getWidth(), mTextureView.getHeight());
+        } else {
+            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+        }
     }
 
     // Computes and applies a texture transform so the preview matches the sensor orientation/aspect.
@@ -491,7 +596,16 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         }
         mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
         mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+
+        // Resolve the configured video format, falling back to MP4/H.264 on unsupported devices.
+        String vfmt = SettingsManager.getVideoFormat(activity);
+        if (!SettingsManager.isVideoFormatSupported(vfmt)) {
+            vfmt = SettingsManager.DEF_VIDEO_FORMAT;
+            Toast.makeText(activity, R.string.video_format_unsupported, Toast.LENGTH_SHORT).show();
+        }
+        mVideoFormatResolved = vfmt;
+
+        mMediaRecorder.setOutputFormat(SettingsManager.getVideoOutputFormat(vfmt));
         if (mNextVideoAbsolutePath == null || mNextVideoAbsolutePath.isEmpty()) {
             mNextVideoAbsolutePath = getVideoFilePath(getActivity());
         }
@@ -499,8 +613,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         mMediaRecorder.setVideoEncodingBitRate(10000000);
         mMediaRecorder.setVideoFrameRate(30);
         mMediaRecorder.setVideoSize(mVideoSize.getWidth(), mVideoSize.getHeight());
-        mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+        mMediaRecorder.setVideoEncoder(SettingsManager.getVideoEncoder(vfmt));
+        mMediaRecorder.setAudioEncoder(SettingsManager.getAudioEncoder(vfmt));
         int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
         switch (mSensorOrientation) {
             case SENSOR_ORIENTATION_DEFAULT_DEGREES:
@@ -516,8 +630,9 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     // Builds the absolute path for a new video file inside the app's external Movies directory.
     private String getVideoFilePath(Context context) {
         final File dir = context.getExternalFilesDir(null);
+        String ext = SettingsManager.getVideoExtension(mVideoFormatResolved);
         return (dir == null ? "" : (dir.getAbsolutePath() + "/"))
-                + System.currentTimeMillis() + ".mp4";
+                + System.currentTimeMillis() + ext;
     }
 
     // Starts MediaRecorder, switches the capture session to record and updates the UI button.
@@ -532,6 +647,7 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             assert texture != null;
             texture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
             mPreviewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+            applyFlashMode(mPreviewBuilder, true);
             List<Surface> surfaces = new ArrayList<>();
 
             Surface previewSurface = new Surface(texture);
@@ -587,6 +703,10 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         mMediaRecorder.stop();
         mMediaRecorder.reset();
 
+        final File videoFile = (mNextVideoAbsolutePath != null)
+                ? new File(mNextVideoAbsolutePath) : null;
+        mLastVideoFile = videoFile;
+
         androidx.fragment.app.FragmentActivity activity = getActivity();
         if (null != activity) {
             Toast.makeText(activity, "Video saved: " + mNextVideoAbsolutePath,
@@ -594,6 +714,10 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             Log.d(TAG, "Video saved: " + mNextVideoAbsolutePath);
         }
         mNextVideoAbsolutePath = null;
+        if (videoFile != null) {
+            CameraUtils.updateVideoThumbnail(videoFile, mThumbnail, mBackgroundHandler,
+                    new Handler(Looper.getMainLooper()));
+        }
         startPreview();
     }
 

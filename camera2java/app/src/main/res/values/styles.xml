@@ -3,4 +3,10 @@
     <style name="MaterialTheme" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowFullscreen">true</item>
     </style>
+
+    <!-- Settings page: same light theme but not fullscreen so the status bar stays visible. -->
+    <style name="SettingsTheme" parent="MaterialTheme">
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:statusBarColor">@color/settings_status_bar</item>
+    </style>
 </resources>

@@ -55,6 +55,7 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
 import android.widget.Toast;
 
 import androidx.fragment.app.Fragment;
@@ -78,7 +79,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Camera2Raw: captures both RAW (DNG) and JPEG images with 3A convergence and reference-counted
  * resource management.
  */
-public class Camera2RawFragment extends Fragment implements View.OnClickListener {
+public class Camera2RawFragment extends Fragment implements View.OnClickListener, FlashControl {
 
     // Maps device screen rotation to the JPEG orientation value required by the camera sensor.
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
@@ -164,6 +165,16 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
     private Size mPreviewSize;
     // Static characteristics (capabilities, orientation, AF modes) of the selected camera.
     private CameraCharacteristics mCharacteristics;
+    // Current lens facing (back or front); toggled by the reverse button.
+    private int mCurrentFacing = CameraCharacteristics.LENS_FACING_BACK;
+    // Selected flash mode, synced from the top-bar flash button via FlashControl.
+    private int mFlashMode = FlashControl.FLASH_AUTO;
+    // Whether the selected camera supports flash.
+    private boolean mFlashSupported;
+    // Thumbnail button showing the last captured JPEG; click opens the full image.
+    private ImageButton mThumbnail;
+    // Most recently captured JPEG file, used by the thumbnail button.
+    private File mLastJpegFile;
     // Handler bound to the background thread's looper.
     private Handler mBackgroundHandler;
     // Reference-counted reader that receives JPEG frames captured by the camera.
@@ -349,6 +360,7 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
 
             if (jpegBuilder != null) jpegBuilder.setFile(jpegFile);
             if (rawBuilder != null) rawBuilder.setFile(rawFile);
+            mLastJpegFile = jpegFile;
         }
 
         @Override
@@ -382,6 +394,13 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
             }
 
             showToast(sb.toString());
+
+            // Refresh the thumbnail a moment later, once the JPEG has been flushed to disk.
+            final File jf = mLastJpegFile;
+            if (jf != null && mBackgroundHandler != null && mThumbnail != null) {
+                mBackgroundHandler.postDelayed(() -> CameraUtils.updateImageThumbnail(
+                        jf, mThumbnail, mBackgroundHandler, new Handler(Looper.getMainLooper())), 500);
+            }
         }
 
         @Override
@@ -423,10 +442,13 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
     }
 
     @Override
-    // Wires up the capture/info buttons, caches the preview TextureView and sets up the orientation listener.
+    // Wires up the capture/reverse/thumbnail buttons, caches the preview TextureView and sets up the
+    // orientation listener.
     public void onViewCreated(final View view, Bundle savedInstanceState) {
         view.findViewById(R.id.picture).setOnClickListener(this);
-        view.findViewById(R.id.info).setOnClickListener(this);
+        mThumbnail = view.findViewById(R.id.thumbnail);
+        mThumbnail.setOnClickListener(this);
+        view.findViewById(R.id.reverse).setOnClickListener(this);
         mTextureView = view.findViewById(R.id.texture);
 
         mOrientationListener = new OrientationEventListener(getActivity(),
@@ -487,21 +509,20 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
     }
 
     @Override
-    // Handles the capture button (take a picture) and the info button (shows help dialog).
+    // Handles the capture button (take a picture), the reverse button (switches camera) and the
+    // thumbnail button (opens the last captured JPEG).
     public void onClick(View view) {
         switch (view.getId()) {
             case R.id.picture: {
                 takePicture();
                 break;
             }
-            case R.id.info: {
-                androidx.fragment.app.FragmentActivity activity = getActivity();
-                if (null != activity) {
-                    new AlertDialog.Builder(activity)
-                            .setMessage(R.string.intro_message)
-                            .setPositiveButton(android.R.string.ok, null)
-                            .show();
-                }
+            case R.id.reverse: {
+                switchCamera();
+                break;
+            }
+            case R.id.thumbnail: {
+                CameraUtils.openMedia(getActivity(), mLastJpegFile, false);
                 break;
             }
         }
@@ -525,6 +546,11 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
                 if (!contains(characteristics.get(
                                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
                         CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
+                    continue;
+                }
+
+                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (facing != null && facing != mCurrentFacing) {
                     continue;
                 }
 
@@ -558,6 +584,9 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
 
                     mCharacteristics = characteristics;
                     mCameraId = cameraId;
+                    Boolean flashAvailable = characteristics.get(
+                            CameraCharacteristics.FLASH_INFO_AVAILABLE);
+                    mFlashSupported = flashAvailable != null && flashAvailable;
                 }
                 return true;
             }
@@ -721,6 +750,11 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
 
                                 try {
                                     setup3AControlsLocked(mPreviewRequestBuilder);
+                                    MainActivity main = (MainActivity) getActivity();
+                                    if (main != null) {
+                                        mFlashMode = main.getFlashMode();
+                                    }
+                                    applyFlashMode(mPreviewRequestBuilder, false);
                                     cameraCaptureSession.setRepeatingRequest(
                                             mPreviewRequestBuilder.build(),
                                             mPreCaptureCallback, mBackgroundHandler);
@@ -915,6 +949,7 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
             captureBuilder.addTarget(mRawImageReader.get().getSurface());
 
             setup3AControlsLocked(captureBuilder);
+            applyFlashMode(captureBuilder, true);
 
             int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
             captureBuilder.set(CaptureRequest.JPEG_ORIENTATION,
@@ -1088,5 +1123,68 @@ public class Camera2RawFragment extends Fragment implements View.OnClickListener
     // Returns true if the precapture wait has exceeded PRECAPTURE_TIMEOUT_MS.
     private boolean hitTimeoutLocked() {
         return (SystemClock.elapsedRealtime() - mCaptureTimer) > PRECAPTURE_TIMEOUT_MS;
+    }
+
+    // Applies the current flash mode to a capture request builder. isCapture forces the flash for the
+    // still capture (so "on" fires the flash); the preview request uses auto-flash for "on".
+    private void applyFlashMode(CaptureRequest.Builder requestBuilder, boolean isCapture) {
+        if (!mFlashSupported) {
+            return;
+        }
+        switch (mFlashMode) {
+            case FlashControl.FLASH_OFF:
+                requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON);
+                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                break;
+            case FlashControl.FLASH_ON:
+                if (isCapture) {
+                    requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                            CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH);
+                    requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE);
+                } else {
+                    requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                            CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                }
+                break;
+            default: // AUTO
+                requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                break;
+        }
+    }
+
+    // FlashControl: the top-bar flash button routes its mode here while this fragment is active.
+    @Override
+    public void setFlashMode(int mode) {
+        mFlashMode = mode;
+        if (mPreviewRequestBuilder != null && mCaptureSession != null && mFlashSupported) {
+            applyFlashMode(mPreviewRequestBuilder, false);
+            try {
+                mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(),
+                        mPreCaptureCallback, mBackgroundHandler);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public int getFlashMode() {
+        return mFlashMode;
+    }
+
+    @Override
+    public boolean isFlashSupported() {
+        return mFlashSupported;
+    }
+
+    // Toggles between the front and back camera and reopens the device.
+    private void switchCamera() {
+        mCurrentFacing = (mCurrentFacing == CameraCharacteristics.LENS_FACING_BACK)
+                ? CameraCharacteristics.LENS_FACING_FRONT
+                : CameraCharacteristics.LENS_FACING_BACK;
+        closeCamera();
+        openCamera();
     }
 }
