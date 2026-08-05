@@ -34,6 +34,8 @@ public final class SettingsManager {
     public static final String KEY_PHOTO_FORMAT = "photo_format";
     public static final String KEY_VIDEO_SIZE = "video_size";
     public static final String KEY_VIDEO_FORMAT = "video_format";
+    // Still-capture algorithm mode: "single" | "hdr" | "denoise".
+    public static final String KEY_CAPTURE_MODE = "capture_mode";
 
     // Defaults. "auto" always means "let the fragment choose its own default".
     public static final String DEF_PREVIEW_SIZE = "auto";
@@ -42,6 +44,12 @@ public final class SettingsManager {
     public static final String DEF_PHOTO_FORMAT = "jpeg";
     public static final String DEF_VIDEO_SIZE = "auto";
     public static final String DEF_VIDEO_FORMAT = "mp4_h264";
+    public static final String DEF_CAPTURE_MODE = "single";
+
+    // Capture-mode value strings.
+    public static final String MODE_SINGLE = "single";
+    public static final String MODE_HDR = "hdr";
+    public static final String MODE_DENOISE = "denoise";
 
     // Sentinel value stored for "let the fragment decide".
     public static final String AUTO = "auto";
@@ -95,6 +103,25 @@ public final class SettingsManager {
     @NonNull
     public static String getVideoFormat(@NonNull Context c) {
         return get(c, KEY_VIDEO_FORMAT, DEF_VIDEO_FORMAT);
+    }
+
+    @NonNull
+    public static String getCaptureMode(@NonNull Context c) {
+        return get(c, KEY_CAPTURE_MODE, DEF_CAPTURE_MODE);
+    }
+
+    /** Maps the persisted capture-mode key to a {@link CameraAlgorithm.CaptureMode}. */
+    @NonNull
+    public static CameraAlgorithm.CaptureMode getCaptureModeEnum(@NonNull Context c) {
+        switch (get(c, KEY_CAPTURE_MODE, DEF_CAPTURE_MODE)) {
+            case MODE_HDR:
+                return CameraAlgorithm.CaptureMode.HDR;
+            case MODE_DENOISE:
+                return CameraAlgorithm.CaptureMode.DENOISE;
+            case MODE_SINGLE:
+            default:
+                return CameraAlgorithm.CaptureMode.SINGLE;
+        }
     }
 
     /** Restores every preference to its default value. */

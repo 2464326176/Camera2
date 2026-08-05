@@ -41,6 +41,19 @@
     <string name="settings_section_about">关于</string>
     <string name="settings_label_size">尺寸</string>
     <string name="settings_label_format">格式</string>
+    <string name="settings_label_algorithm">算法</string>
+
+    <!-- Capture-mode (algorithm) selector entries / values -->
+    <string-array name="capture_mode_entries">
+        <item>单帧</item>
+        <item>多帧 HDR [4,0,-4,-8]</item>
+        <item>多帧降噪 [6帧]</item>
+    </string-array>
+    <string-array name="capture_mode_values">
+        <item>single</item>
+        <item>hdr</item>
+        <item>denoise</item>
+    </string-array>
     <string name="settings_save">保存</string>
     <string name="settings_reset">恢复默认</string>
     <string name="settings_saved">设置已保存</string>

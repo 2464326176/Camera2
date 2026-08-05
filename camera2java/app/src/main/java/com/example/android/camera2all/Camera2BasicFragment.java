@@ -131,26 +131,96 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             // Call timing: every preview frame arrives, before the TextureView render update.
             // Data flow: preview frame (NV21 / placeholder here) -> processFrame() -> processed Bitmap
             // Threading: currently runs on the camera background thread (SurfaceTexture frame callback).
-            if (mSingleFrameAlgorithm != null && mPreviewSize != null) {
+            if (mPreviewAlgorithm != null && mPreviewSize != null) {
                 // The mock does not hold a real NV21 buffer; null is used as a placeholder for the
                 // "raw frame", replace it with YUV pulled from the SurfaceTexture on real integration.
                 // The returned Bitmap can overwrite/composite before the UI render.
-                Bitmap processed = mSingleFrameAlgorithm.processFrame(
-                        null, mPreviewSize.getWidth(), mPreviewSize.getHeight());
-                // `processed` is the result "completed before the UI render" (mock returns a
-                // placeholder Bitmap; it does not participate in the actual render).
+                Bitmap processed = mPreviewAlgorithm.processFrame(
+                        null, mPreviewSize.getWidth(), mPreviewSize.getHeight(),
+                        System.nanoTime());
+                // `processed` is the result "completed before the UI render" (mock returns null).
             }
         }
 
     };
 
-    // === Algorithm pseudo-interface hooks (mock, no real algorithm integrated) ===
-    // Single-frame algorithm: invoked in the preview frame callback, completes before the UI render.
-    private final CameraAlgorithm.SingleFrameAlgorithm mSingleFrameAlgorithm =
-            new CameraAlgorithm.MockSingleFrameAlgorithm();
-    // Multi-frame algorithm: invoked in the post-capture processing stage, runs on a background thread.
-    private final CameraAlgorithm.MultiFrameAlgorithm mMultiFrameAlgorithm =
-            new CameraAlgorithm.MockMultiFrameAlgorithm();
+    // === Algorithm framework (mock, no real algorithm integrated) =====================
+    // One hook per AlgorithmStage. All are null-safe; swapping the Mock* impl for a real
+    // algorithm is the only change needed to activate a stage.
+    private final CameraAlgorithm.PreviewAlgorithm mPreviewAlgorithm =
+            new CameraAlgorithm.MockPreviewAlgorithm();
+    private final CameraAlgorithm.StillSingleAlgorithm mStillSingleAlgorithm =
+            new CameraAlgorithm.MockStillSingleAlgorithm();
+    private final CameraAlgorithm.StillHdrAlgorithm mStillHdrAlgorithm =
+            new CameraAlgorithm.MockStillHdrAlgorithm();
+    private final CameraAlgorithm.StillDenoiseAlgorithm mStillDenoiseAlgorithm =
+            new CameraAlgorithm.MockStillDenoiseAlgorithm();
+
+    // Burst collector for multi-frame still modes. Accumulates JPEG bytes per capture batch;
+    // when the expected frame count is reached, the matching still algorithm runs on a
+    // background thread. Guarded by mBurstLock.
+    private final Object mBurstLock = new Object();
+    private int mBurstExpected = 0;       // number of frames this batch expects
+    private int mBurstReceived = 0;       // frames collected so far
+    private List<byte[]> mBurstFrames = null;  // collected JPEG bytes (ordered by capture)
+    // Which multi-frame algorithm the in-flight batch targets.
+    private CameraAlgorithm.CaptureMode mBurstMode = CameraAlgorithm.CaptureMode.SINGLE;
+
+    private void startBurstBatch(CameraAlgorithm.CaptureMode mode) {
+        synchronized (mBurstLock) {
+            mBurstMode = mode;
+            mBurstExpected = mode.frameCount;
+            mBurstReceived = 0;
+            mBurstFrames = new ArrayList<>(mBurstExpected);
+        }
+    }
+
+    // Called for every saved still frame of the current batch. Runs on the background thread.
+    // When the batch is complete, dispatches the correct multi-frame algorithm.
+    private void collectBurstFrame(byte[] jpeg) {
+        CameraAlgorithm.CaptureMode mode;
+        List<byte[]> batch;
+        boolean complete;
+        synchronized (mBurstLock) {
+            if (mBurstFrames == null) return;
+            mBurstFrames.add(jpeg);
+            mBurstReceived++;
+            complete = mBurstReceived >= mBurstExpected;
+            mode = mBurstMode;
+            batch = complete ? mBurstFrames : null;
+            if (complete) mBurstFrames = null;  // reset for the next capture
+        }
+        if (complete && batch != null) {
+            Bitmap processed = runStillMultiFrameAlgorithm(mode, batch);
+            Log.d(TAG, "Multi-frame algorithm done: mode=" + mode + " frames=" + batch.size()
+                    + " processed=" + processed);
+            // The whole burst has been collected: resume the live preview on the bg handler.
+            if (mBackgroundHandler != null) {
+                mBackgroundHandler.post(this::unlockFocus);
+            } else {
+                unlockFocus();
+            }
+        }
+    }
+
+    // Runs the correct still multi-frame algorithm for the given mode. Background thread.
+    private Bitmap runStillMultiFrameAlgorithm(CameraAlgorithm.CaptureMode mode, List<byte[]> frames) {
+        switch (mode) {
+            case HDR:
+                return mStillHdrAlgorithm.processHdr(frames);
+            case DENOISE:
+                return mStillDenoiseAlgorithm.processDenoise(frames);
+            case SINGLE:
+            default:
+                // Single frame: use the still-single algorithm on the only frame.
+                return mStillSingleAlgorithm.processStill(frames.get(0));
+        }
+    }
+
+    // Reads the user-selected capture mode from settings (defaults to SINGLE).
+    private CameraAlgorithm.CaptureMode currentCaptureMode() {
+        return SettingsManager.getCaptureModeEnum(requireContext());
+    }
 
     // Id of the back-facing camera chosen for this fragment.
     private String mCameraId;
@@ -221,9 +291,19 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
 
         @Override
         public void onImageAvailable(ImageReader reader) {
-            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile));
-            // Refresh the thumbnail shortly after, so the JPEG has been flushed to disk.
+            // Acquire the frame once; we need both the raw JPEG bytes (for the still algorithm)
+            // and a saved file (thumbnail / gallery). ImageSaver consumes the Image, so we copy
+            // the bytes out first.
+            final Image image = reader.acquireNextImage();
+            final byte[] jpegBytes = CameraUtils.imageToJpegBytes(image);
             final File saved = mFile;
+            mBackgroundHandler.post(new ImageSaver(image, saved));
+            // Multi-frame collector: accumulates this frame; when the burst is complete it runs the
+            // still algorithm (single / HDR / denoise) on a background thread.
+            if (jpegBytes != null) {
+                collectBurstFrame(jpegBytes);
+            }
+            // Refresh the thumbnail shortly after, so the JPEG has been flushed to disk.
             mBackgroundHandler.postDelayed(() -> CameraUtils.updateImageThumbnail(
                     saved, mThumbnail, mBackgroundHandler,
                     new Handler(Looper.getMainLooper())), 400);
@@ -464,7 +544,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                         : Collections.max(Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                                 new CompareSizesByArea());
                 mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.JPEG, /*maxImages*/2);
+                        ImageFormat.JPEG, /*maxImages*/8);
                 mImageReader.setOnImageAvailableListener(
                         mOnImageAvailableListener, mBackgroundHandler);
 
@@ -739,80 +819,126 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         }
     }
 
-    // Builds and submits the still-capture request (JPEG) using the STILL_CAPTURE template.
+    // Builds and submits the still-capture request(s) using the STILL_CAPTURE template.
+    // - SINGLE  : one JPEG, processed by the still-single algorithm.
+    // - HDR     : a burst of frames with exposure compensation [4,0,-4,-8], merged by the HDR algorithm.
+    // - DENOISE : a burst of N identical frames, merged by the denoise algorithm.
     private void captureStillPicture() {
         try {
             final androidx.fragment.app.FragmentActivity activity = getActivity();
             if (null == activity || null == mCameraDevice) {
                 return;
             }
-            final CaptureRequest.Builder captureBuilder =
-                    mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            captureBuilder.addTarget(mImageReader.getSurface());
-            if (mRawImageReader != null) {
-                captureBuilder.addTarget(mRawImageReader.getSurface());
-            }
+            final CameraAlgorithm.CaptureMode mode = currentCaptureMode();
+            final int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
 
-            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            applyFlashMode(captureBuilder, true);
-
-            int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
-            captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getOrientation(rotation));
-
-            CameraCaptureSession.CaptureCallback CaptureCallback
-                    = new CameraCaptureSession.CaptureCallback() {
-
-                @Override
-                public void onCaptureCompleted(@NonNull CameraCaptureSession session,
-                                               @NonNull CaptureRequest request,
-                                               @NonNull TotalCaptureResult result) {
-                    // When DNG capture is enabled, persist the RAW frame as a proper DNG file,
-                    // pairing it with this capture's result/characteristics for DngCreator.
-                    if (mRawImageReader != null && mRawFile != null && mCharacteristics != null) {
-                        Image rawImage = mRawImageReader.acquireLatestImage();
-                        if (rawImage != null) {
-                            final Image finalRaw = rawImage;
-                            final TotalCaptureResult finalResult = result;
-                            mBackgroundHandler.post(() -> {
-                                FileOutputStream out = null;
-                                try {
-                                    DngCreator dngCreator =
-                                            new DngCreator(mCharacteristics, finalResult);
-                                    out = new FileOutputStream(mRawFile);
-                                    dngCreator.writeImage(out, finalRaw);
-                                } catch (Exception e) {
-                                    Log.e(TAG, "Failed to write DNG: " + e.getMessage());
-                                    e.printStackTrace();
-                                } finally {
-                                    finalRaw.close();
-                                    if (out != null) {
-                                        try {
-                                            out.close();
-                                        } catch (IOException e) {
-                                            e.printStackTrace();
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    }
-
-                    String saved = "Saved: " + mFile;
-                    if (mRawFile != null) {
-                        saved += ", " + mRawFile.getName();
-                    }
-                    showToast(saved);
-                    Log.d(TAG, saved);
-                    unlockFocus();
-                }
-            };
-
+            // Stop the repeating preview so the still request is not interleaved with preview
+            // frames. Do NOT call abortCaptures() here: aborting an in-flight session repeatedly
+            // produces "Session is already aborting" storms and "unknown request ID" errors that
+            // make the capture appear to do nothing.
             mCaptureSession.stopRepeating();
-            mCaptureSession.abortCaptures();
-            mCaptureSession.capture(captureBuilder.build(), CaptureCallback, null);
+
+            if (mode == CameraAlgorithm.CaptureMode.SINGLE) {
+                // Single still: one JPEG request, then the still-single algorithm.
+                CaptureRequest.Builder captureBuilder =
+                        mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                captureBuilder.addTarget(mImageReader.getSurface());
+                if (mRawImageReader != null) {
+                    captureBuilder.addTarget(mRawImageReader.getSurface());
+                }
+                captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                applyFlashMode(captureBuilder, true);
+                captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getOrientation(rotation));
+                startBurstBatch(CameraAlgorithm.CaptureMode.SINGLE);
+                // Resume the preview once the still request completes.
+                mCaptureSession.capture(captureBuilder.build(), singleShotCallback(),
+                        mBackgroundHandler);
+            } else {
+                // Multi-frame burst: HDR (exposure bracketing) or DENOISE (identical frames).
+                // Build one request per frame; each still triggers onImageAvailable -> collectBurstFrame.
+                List<CaptureRequest> burst = new ArrayList<>(mode.frameCount);
+                for (int i = 0; i < mode.frameCount; i++) {
+                    CaptureRequest.Builder b =
+                            mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                    b.addTarget(mImageReader.getSurface());
+                    b.set(CaptureRequest.CONTROL_AF_MODE,
+                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                    applyFlashMode(b, true);
+                    b.set(CaptureRequest.JPEG_ORIENTATION, getOrientation(rotation));
+                    if (mode == CameraAlgorithm.CaptureMode.HDR) {
+                        // Exposure compensation recipe [4,0,-4,-8], in capture order.
+                        b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
+                                CameraAlgorithm.HDR_EXPOSURE_VALUES[i]);
+                    }
+                    // DENOISE: identical settings for every frame (NO extra AE compensation).
+                    burst.add(b.build());
+                }
+                startBurstBatch(mode);
+                // The preview is resumed by the burst collector once the whole batch is received
+                // (see collectBurstFrame), so just submit the burst here.
+                mCaptureSession.captureBurst(burst, burstDngCallback(), mBackgroundHandler);
+            }
         } catch (CameraAccessException e) {
             e.printStackTrace();
+        }
+    }
+
+    // Single-frame still callback: persists the DNG (if enabled) then returns to preview.
+    private CameraCaptureSession.CaptureCallback singleShotCallback() {
+        return new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                                           @NonNull CaptureRequest request,
+                                           @NonNull TotalCaptureResult result) {
+                saveDngIfNeeded(result);
+                // The hardware has finished the still request: resume the live preview.
+                unlockFocus();
+            }
+        };
+    }
+
+    // Multi-frame burst callback: only persists the DNG per frame. The preview is resumed
+    // once the whole batch is collected (see collectBurstFrame -> onBatchComplete).
+    private CameraCaptureSession.CaptureCallback burstDngCallback() {
+        return new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                                           @NonNull CaptureRequest request,
+                                           @NonNull TotalCaptureResult result) {
+                saveDngIfNeeded(result);
+            }
+        };
+    }
+
+    // Persist the RAW frame as a DNG file, pairing it with this capture's result/characteristics.
+    private void saveDngIfNeeded(@NonNull TotalCaptureResult result) {
+        if (mRawImageReader != null && mRawFile != null && mCharacteristics != null) {
+            Image rawImage = mRawImageReader.acquireLatestImage();
+            if (rawImage != null) {
+                final Image finalRaw = rawImage;
+                final TotalCaptureResult finalResult = result;
+                mBackgroundHandler.post(() -> {
+                    FileOutputStream out = null;
+                    try {
+                        DngCreator dngCreator = new DngCreator(mCharacteristics, finalResult);
+                        out = new FileOutputStream(mRawFile);
+                        dngCreator.writeImage(out, finalRaw);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to write DNG: " + e.getMessage());
+                        e.printStackTrace();
+                    } finally {
+                        finalRaw.close();
+                        if (out != null) {
+                            try {
+                                out.close();
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
 

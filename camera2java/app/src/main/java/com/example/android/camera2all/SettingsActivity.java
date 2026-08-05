@@ -28,6 +28,7 @@ public class SettingsActivity extends AppCompatActivity {
     private Spinner mSpPreviewFormat;
     private Spinner mSpPhotoSize;
     private Spinner mSpPhotoFormat;
+    private Spinner mSpCaptureMode;
     private Spinner mSpVideoSize;
     private Spinner mSpVideoFormat;
 
@@ -49,6 +50,7 @@ public class SettingsActivity extends AppCompatActivity {
         mSpPreviewFormat = findViewById(R.id.sp_preview_format);
         mSpPhotoSize = findViewById(R.id.sp_photo_size);
         mSpPhotoFormat = findViewById(R.id.sp_photo_format);
+        mSpCaptureMode = findViewById(R.id.sp_capture_mode);
         mSpVideoSize = findViewById(R.id.sp_video_size);
         mSpVideoFormat = findViewById(R.id.sp_video_format);
 
@@ -65,6 +67,8 @@ public class SettingsActivity extends AppCompatActivity {
                     valueOf(mSpPhotoSize, R.array.photo_size_values));
             SettingsManager.put(this, SettingsManager.KEY_PHOTO_FORMAT,
                     valueOf(mSpPhotoFormat, R.array.photo_format_values));
+            SettingsManager.put(this, SettingsManager.KEY_CAPTURE_MODE,
+                    valueOf(mSpCaptureMode, R.array.capture_mode_values));
             SettingsManager.put(this, SettingsManager.KEY_VIDEO_SIZE,
                     valueOf(mSpVideoSize, R.array.video_size_values));
             SettingsManager.put(this, SettingsManager.KEY_VIDEO_FORMAT,
@@ -93,6 +97,8 @@ public class SettingsActivity extends AppCompatActivity {
                 SettingsManager.getPhotoSize(this));
         setupSpinner(mSpPhotoFormat, R.array.photo_format_entries, R.array.photo_format_values,
                 SettingsManager.getPhotoFormat(this));
+        setupSpinner(mSpCaptureMode, R.array.capture_mode_entries, R.array.capture_mode_values,
+                SettingsManager.getCaptureMode(this));
         setupSpinner(mSpVideoSize, R.array.video_size_entries, R.array.video_size_values,
                 SettingsManager.getVideoSize(this));
         setupSpinner(mSpVideoFormat, R.array.video_format_entries, R.array.video_format_values,

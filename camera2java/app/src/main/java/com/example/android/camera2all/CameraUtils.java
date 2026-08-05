@@ -3,6 +3,7 @@ package com.example.android.camera2all;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.Image;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Handler;
@@ -16,6 +17,7 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 
 /**
  * Shared helpers for the camera fragments: choosing a camera by lens facing,
@@ -44,6 +46,22 @@ public final class CameraUtils {
         }
         String[] ids = manager.getCameraIdList();
         return ids.length > 0 ? ids[0] : null;
+    }
+
+    // Copies the encoded JPEG bytes out of a JPEG-format Image WITHOUT closing it, so the caller
+    // can still hand the Image to an ImageSaver afterwards. Returns null for non-JPEG images.
+    public static byte[] imageToJpegBytes(Image image) {
+        if (image == null || image.getFormat() != android.graphics.ImageFormat.JPEG) {
+            return null;
+        }
+        try {
+            ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            return bytes;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // Decodes a downscaled JPEG on the background thread, then sets it on the thumbnail button (UI thread).

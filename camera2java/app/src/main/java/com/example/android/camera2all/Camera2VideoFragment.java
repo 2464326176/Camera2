@@ -131,11 +131,18 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             // Data flow: raw video frame (NV21) -> processVideoFrame() -> processed Bitmap (watermark/beauty)
             // Threading: posted to the dedicated algorithm thread (mAlgorithmHandler) so it never
             // blocks the main thread or the render pipeline.
-            if (mVideoFrameAlgorithm != null && mAlgorithmHandler != null && mPreviewSize != null) {
-                final long tsUs = System.nanoTime() / 1000; // mock timestamp (microseconds)
+            if (mVideoAlgorithm != null && mAlgorithmHandler != null && mPreviewSize != null) {
+                final long tsNs = System.nanoTime();
+                // onSurfaceTextureUpdated fires both in preview and while recording (the preview
+                // surface stays live during capture), so the same hook covers both PREVIEW and
+                // VIDEO (recording) stages; mIsRecordingVideo disambiguates the active stage.
+                final boolean recording = mIsRecordingVideo;
                 mAlgorithmHandler.post(() ->
-                        mVideoFrameAlgorithm.processVideoFrame(
-                                null, mPreviewSize.getWidth(), mPreviewSize.getHeight(), tsUs));
+                        mVideoAlgorithm.processFrame(
+                                null, mPreviewSize.getWidth(), mPreviewSize.getHeight(), tsNs));
+                if (recording) {
+                    Log.v(TAG, "Video algorithm (recording stage) frame processed");
+                }
             }
         }
 
@@ -169,8 +176,10 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     // === Algorithm pseudo-interface hook (video-frame processing, mock) ===
     // Video-frame algorithm: invoked in the video preview frame callback (onSurfaceTextureUpdated),
     // executed on a dedicated thread so it does not block rendering.
-    private final CameraAlgorithm.VideoFrameAlgorithm mVideoFrameAlgorithm =
-            new CameraAlgorithm.MockVideoFrameAlgorithm();
+    // Per-frame video algorithm (preview + recording). Null-safe; swap the Mock impl for a real
+    // algorithm to activate it. Runs on a dedicated thread so it never blocks render/record.
+    private final CameraAlgorithm.VideoAlgorithm mVideoAlgorithm =
+            new CameraAlgorithm.MockVideoAlgorithm();
     // Dedicated thread for the video-frame algorithm: keeps processing off the main thread and
     // the render pipeline.
     private HandlerThread mAlgorithmThread;
