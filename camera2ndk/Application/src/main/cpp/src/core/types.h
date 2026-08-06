@@ -14,6 +14,17 @@ namespace camera_engine {
 
 enum class YuvFormat { NV21 = 0, NV12 = 1, I420 = 2 };
 
+/**
+ * Describes one CPU-accessible plane of a YUV image. Platform-agnostic so it
+ * can be shared by the core frame abstraction, the Android HardwareBuffer
+ * adapter, and the C ABI layer without pulling in platform headers.
+ */
+struct YuvPlane {
+    uint8_t* data = nullptr;
+    int32_t rowStride = 0;
+    int32_t pixelStride = 0;
+};
+
 enum class AlgorithmId {
     FACE_DETECT = 0,
     DENOISE = 1,

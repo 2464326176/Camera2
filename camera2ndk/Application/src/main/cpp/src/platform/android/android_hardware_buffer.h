@@ -8,16 +8,9 @@
 #include <android/hardware_buffer.h>
 #include <cstdint>
 
-namespace camera_engine {
+#include "src/core/types.h"
 
-/**
- * Describes one CPU-accessible plane inside a locked YUV HardwareBuffer.
- */
-struct YuvPlane {
-    uint8_t* data = nullptr;
-    int32_t rowStride = 0;
-    int32_t pixelStride = 0;
-};
+namespace camera_engine {
 
 /**
  * Owns temporary CPU access to an Android HardwareBuffer.

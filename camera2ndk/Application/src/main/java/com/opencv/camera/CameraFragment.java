@@ -427,8 +427,16 @@ public class CameraFragment extends Fragment implements CameraEngine.CameraCallb
                         topBarPadR, topBarPadB);
             }
             if (bottomBar != null) {
+                // Lift the entire bottom UI above the navigation/gesture bar by
+                // reserving nav inset as bottom margin (not just internal padding),
+                // so mode_container / pro_panel chained above it clear the system UI.
                 bottomBar.setPadding(bottomBarPadL, bottomBarPadT,
-                        bottomBarPadR, bottomBarPadB + nav.bottom);
+                        bottomBarPadR, bottomBarPadB);
+                ViewGroup.LayoutParams lp = bottomBar.getLayoutParams();
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    ((ViewGroup.MarginLayoutParams) lp).bottomMargin = nav.bottom;
+                    bottomBar.setLayoutParams(lp);
+                }
             }
             return insets;
         });

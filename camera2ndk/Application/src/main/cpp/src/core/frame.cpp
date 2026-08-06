@@ -5,6 +5,7 @@
  * metadata updates, and OpenCV Mat view conversion for native algorithms.
  */
 #include "src/core/frame.h"
+#include "src/platform/android/android_hardware_buffer.h"
 #include <android/log.h>
 #include <algorithm>
 #include <cstring>
@@ -13,6 +14,10 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
 namespace camera_engine {
+
+YuvFrame::YuvFrame() = default;
+
+YuvFrame::~YuvFrame() = default;
 
 YuvFrame::YuvFrame(std::shared_ptr<HardwareBufferRef> hwBuf,
                    const FrameMetadata& meta,

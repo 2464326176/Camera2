@@ -33,6 +33,7 @@ set(CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp)
 set(API_SOURCES
     ${CPP_DIR}/src/api/camera_engine_api.cpp
     ${CPP_DIR}/src/api/camera_engine_android.cpp
+    ${CPP_DIR}/src/api/internal_convert.cpp
 )
 
 set(CORE_SOURCES

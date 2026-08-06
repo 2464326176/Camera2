@@ -78,41 +78,43 @@ DecisionPlan CaptureDecision::evaluate(
     }
 
     const int iso = std::max(100, metadata.front().iso);
-    if (control.preferDenoise) {
-        AlgorithmStage stage{AlgorithmId::DENOISE, {}};
-        stage.params[PARAM_DENOISE_STRENGTH] =
-            iso >= 1600 ? 1.0f : (iso >= 800 ? 0.8f : 0.5f);
-        plan.needInit.push_back(AlgorithmId::DENOISE);
-        plan.stages.push_back(std::move(stage));
-    }
-    if (control.preferHdr && metadata.size() >= 2) {
-        AlgorithmStage stage{AlgorithmId::HDR, {}};
-        stage.params[PARAM_HDR_STRENGTH] = 0.7f;
-        plan.needInit.push_back(AlgorithmId::HDR);
-        plan.stages.push_back(std::move(stage));
-    }
-    if (control.preferClahe) {
-        AlgorithmStage stage{AlgorithmId::CLAHE, {}};
-        stage.params[PARAM_CLAHE_CLIP_LIMIT] = 2.0f;
-        plan.needInit.push_back(AlgorithmId::CLAHE);
-        plan.stages.push_back(std::move(stage));
-    }
-    if (control.preferSharpen) {
-        AlgorithmStage stage{AlgorithmId::SHARPEN, {}};
-        stage.params[PARAM_SHARPEN_STRENGTH] = iso >= 1600 ? 0.1f : 0.15f;
-        plan.needInit.push_back(AlgorithmId::SHARPEN);
-        plan.stages.push_back(std::move(stage));
-    }
-    if (control.preferSaturation) {
-        AlgorithmStage stage{AlgorithmId::SATURATION, {}};
-        stage.params[PARAM_SATURATION_FACTOR] = 1.05f;
-        plan.needInit.push_back(AlgorithmId::SATURATION);
-        plan.stages.push_back(std::move(stage));
-    }
-    if (control.preferBokeh) {
-        AlgorithmStage stage{AlgorithmId::BOKEH, {}};
-        stage.params[PARAM_BOKEH_STRENGTH] = 0.5f;
-        plan.needInit.push_back(AlgorithmId::BOKEH);
+
+    // Table-driven algorithm selection: each entry binds a preference flag to
+    // its strength calculator and optional availability predicate. Adding a
+    // capture-stage algorithm is a one-line registration here; the loop below
+    // preserves the original DENOISE -> HDR -> CLAHE -> SHARPEN -> SATURATION
+    // -> BOKEH ordering so processing output stays identical.
+    struct AlgoPref {
+        AlgorithmId id;
+        bool SessionControl::* enabled;
+        bool (*available)(const std::vector<FrameMetadata>&, int);
+        AlgorithmParamId param;
+        float (*strength)(int);
+    };
+    static const AlgoPref kPrefs[] = {
+        {AlgorithmId::DENOISE, &SessionControl::preferDenoise, nullptr,
+            PARAM_DENOISE_STRENGTH,
+            [](int v) { return v >= 1600 ? 1.0f : (v >= 800 ? 0.8f : 0.5f); }},
+        {AlgorithmId::HDR, &SessionControl::preferHdr,
+            [](const std::vector<FrameMetadata>& m, int) { return m.size() >= 2; },
+            PARAM_HDR_STRENGTH, [](int) { return 0.7f; }},
+        {AlgorithmId::CLAHE, &SessionControl::preferClahe, nullptr,
+            PARAM_CLAHE_CLIP_LIMIT, [](int) { return 2.0f; }},
+        {AlgorithmId::SHARPEN, &SessionControl::preferSharpen, nullptr,
+            PARAM_SHARPEN_STRENGTH,
+            [](int v) { return v >= 1600 ? 0.1f : 0.15f; }},
+        {AlgorithmId::SATURATION, &SessionControl::preferSaturation, nullptr,
+            PARAM_SATURATION_FACTOR, [](int) { return 1.05f; }},
+        {AlgorithmId::BOKEH, &SessionControl::preferBokeh, nullptr,
+            PARAM_BOKEH_STRENGTH, [](int) { return 0.5f; }},
+    };
+
+    for (const AlgoPref& pref : kPrefs) {
+        if (!(control.*pref.enabled)) continue;
+        if (pref.available != nullptr && !pref.available(metadata, iso)) continue;
+        AlgorithmStage stage{pref.id, {}};
+        stage.params[pref.param] = pref.strength(iso);
+        plan.needInit.push_back(pref.id);
         plan.stages.push_back(std::move(stage));
     }
 

@@ -5,7 +5,6 @@
  * pixel format, and capture metadata through the native processing pipeline.
  */
 #pragma once
-#include "src/platform/android/android_hardware_buffer.h"
 #include "metadata.h"
 #include "types.h"
 #include "opencv2/core.hpp"
@@ -14,12 +13,17 @@
 
 namespace camera_engine {
 
+// The buffer backing a HardwareBuffer-backed frame is platform specific. The
+// core layer only needs an opaque handle so it does not pull in Android NDK
+// headers; the concrete type lives in src/platform/android.
+class HardwareBufferRef;
+
 /**
  * Lightweight YUV frame object passed between native camera modules.
  */
 class YuvFrame {
 public:
-    YuvFrame() = default;
+    YuvFrame();
 
     /**
      * Wraps a locked HardwareBuffer without copying the underlying image data.
@@ -39,6 +43,10 @@ public:
              YuvPlane yPlane,
              YuvPlane uPlane,
              YuvPlane vPlane);
+
+    // Defined out-of-line so the shared_ptr<HardwareBufferRef> deleter can see
+    // the complete HardwareBufferRef type (it lives in the platform layer).
+    ~YuvFrame();
 
     bool isValid() const;
 

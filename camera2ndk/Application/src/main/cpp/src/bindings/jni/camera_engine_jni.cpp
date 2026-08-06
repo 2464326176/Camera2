@@ -16,6 +16,10 @@
 
 namespace {
 
+// Android ImageFormat.YUV_420_888 integer value, used when constructing
+// HardwareBuffer-backed frames from Java Image objects.
+constexpr int32_t kAndroidYuv420Format = 35;
+
 // Shared across threads so the UI thread can query the status produced by the
 // camera callback thread. Replacing the previous thread_local with an atomic
 // avoids returning a stale CAMERA_ENGINE_NOT_READY on the querying thread.
@@ -271,7 +275,7 @@ Java_com_opencv_camera_NativeEngine_nativeProcessPreviewFrame(
     frame.hardware_buffer =
         AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
     frame.metadata = parseMetadata(env, metadataObject);
-    frame.android_format = 35; // ImageFormat.YUV_420_888
+    frame.android_format = kAndroidYuv420Format;
 
     CameraEngineFace faces[32]{};
     CameraEnginePreviewResult result;
@@ -318,7 +322,7 @@ Java_com_opencv_camera_NativeEngine_nativeProcessCapture(
         frame.hardware_buffer =
             AHardwareBuffer_fromHardwareBuffer(env, bufferObject);
         frame.metadata = parseMetadata(env, metadataObject);
-        frame.android_format = 35;
+        frame.android_format = kAndroidYuv420Format;
         if (frame.hardware_buffer != nullptr) {
             AHardwareBuffer_Desc desc{};
             AHardwareBuffer_describe(frame.hardware_buffer, &desc);

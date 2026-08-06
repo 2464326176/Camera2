@@ -9,6 +9,7 @@
 #include "src/algorithms/sharpen.h"
 #include "src/decision/decision.h"
 
+#include <functional>
 #include <utility>
 
 namespace camera_engine {
@@ -130,6 +131,22 @@ public:
     }
 };
 
+// Maps each algorithm id to its constructor so getOrCreate stays free of a
+// long switch. Adding an algorithm is a one-line registration here.
+using AlgorithmFactory = std::function<std::unique_ptr<IAlgorithm>()>;
+const std::unordered_map<AlgorithmId, AlgorithmFactory>& algorithmFactories() {
+    static const std::unordered_map<AlgorithmId, AlgorithmFactory> kFactories = {
+        {AlgorithmId::FACE_DETECT, [] { return std::make_unique<FaceDetectAlgorithm>(); }},
+        {AlgorithmId::DENOISE,     [] { return std::make_unique<DenoiseAlgorithm>(); }},
+        {AlgorithmId::SHARPEN,     [] { return std::make_unique<SharpenAlgorithm>(); }},
+        {AlgorithmId::HDR,         [] { return std::make_unique<HdrAlgorithm>(); }},
+        {AlgorithmId::CLAHE,       [] { return std::make_unique<ClaheAlgorithm>(); }},
+        {AlgorithmId::SATURATION,  [] { return std::make_unique<SaturationAlgorithm>(); }},
+        {AlgorithmId::BOKEH,       [] { return std::make_unique<BokehAlgorithm>(); }},
+    };
+    return kFactories;
+}
+
 } // namespace
 
 AlgorithmManager::AlgorithmManager(PipelineType pipeline) : m_pipeline(pipeline) {}
@@ -142,31 +159,11 @@ IAlgorithm* AlgorithmManager::getOrCreate(AlgorithmId id) {
     const auto found = m_algorithms.find(id);
     if (found != m_algorithms.end()) return found->second.get();
 
-    std::unique_ptr<IAlgorithm> algorithm;
-    switch (id) {
-        case AlgorithmId::FACE_DETECT:
-            algorithm = std::make_unique<FaceDetectAlgorithm>();
-            break;
-        case AlgorithmId::DENOISE:
-            algorithm = std::make_unique<DenoiseAlgorithm>();
-            break;
-        case AlgorithmId::SHARPEN:
-            algorithm = std::make_unique<SharpenAlgorithm>();
-            break;
-        case AlgorithmId::HDR:
-            algorithm = std::make_unique<HdrAlgorithm>();
-            break;
-        case AlgorithmId::CLAHE:
-            algorithm = std::make_unique<ClaheAlgorithm>();
-            break;
-        case AlgorithmId::SATURATION:
-            algorithm = std::make_unique<SaturationAlgorithm>();
-            break;
-        case AlgorithmId::BOKEH:
-            algorithm = std::make_unique<BokehAlgorithm>();
-            break;
-    }
-    if (!algorithm) return nullptr;
+    const auto& factories = algorithmFactories();
+    const auto factory = factories.find(id);
+    if (factory == factories.end()) return nullptr;
+
+    std::unique_ptr<IAlgorithm> algorithm = factory->second();
     IAlgorithm* result = algorithm.get();
     m_algorithms.emplace(id, std::move(algorithm));
     return result;

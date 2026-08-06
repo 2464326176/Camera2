@@ -87,6 +87,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
+        <!-- Left cluster: flash / timer / hdr tightly packed at the far left -->
         <LinearLayout
             android:id="@+id/top_left_group"
             android:layout_width="wrap_content"
@@ -97,7 +98,7 @@
             app:layout_constraintTop_toTopOf="parent">
 
             <FrameLayout
-                android:layout_width="52dp"
+                android:layout_width="48dp"
                 android:layout_height="56dp">
 
                 <ImageView
@@ -115,7 +116,7 @@
             </FrameLayout>
 
             <FrameLayout
-                android:layout_width="52dp"
+                android:layout_width="48dp"
                 android:layout_height="56dp"
                 android:layout_marginStart="2dp">
 
@@ -134,7 +135,7 @@
             </FrameLayout>
 
             <FrameLayout
-                android:layout_width="52dp"
+                android:layout_width="48dp"
                 android:layout_height="56dp"
                 android:layout_marginStart="2dp">
 
@@ -162,9 +163,10 @@
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:text="AI"
-            app:layout_constraintEnd_toStartOf="@id/top_right_group"
-            app:layout_constraintStart_toEndOf="@id/top_left_group"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintHorizontal_bias="0.5" />
 
         <LinearLayout
             android:id="@+id/top_right_group"
@@ -193,8 +195,9 @@
             style="@style/TopControlLabel"
             android:text="ISO --"
             android:textColor="@color/gc_accent"
-            app:layout_constraintEnd_toEndOf="@id/btn_ai"
-            app:layout_constraintStart_toStartOf="@id/btn_ai"
+            android:layout_marginTop="2dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/btn_ai" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -306,7 +309,7 @@
         android:layout_marginBottom="6dp"
         android:gravity="center"
         android:orientation="horizontal"
-        app:layout_constraintBottom_toTopOf="@id/mode_container"
+        app:layout_constraintBottom_toTopOf="@id/pro_panel"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
@@ -426,9 +429,10 @@
         android:paddingEnd="14dp"
         android:paddingBottom="10dp"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/zoom_presets"
+        android:layout_marginTop="8dp"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/iso_label">
 
         <ProgressBar
             android:layout_width="16dp"
@@ -460,7 +464,7 @@
         android:textColor="@color/gc_primary"
         android:textSize="13sp"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/processing_indicator"
+        app:layout_constraintBottom_toTopOf="@id/zoom_presets"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
@@ -498,7 +502,7 @@
         android:paddingEnd="12dp"
         android:paddingBottom="6dp"
         android:text="@string/ae_af_locked"
-        android:textColor="#4CAF50"
+        android:textColor="@color/gc_face_rect"
         android:textSize="13sp"
         android:textStyle="bold"
         android:visibility="gone"

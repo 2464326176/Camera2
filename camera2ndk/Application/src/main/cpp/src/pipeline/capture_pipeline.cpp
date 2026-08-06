@@ -6,6 +6,7 @@
  */
 #include "src/pipeline/capture_pipeline.h"
 #include <android/log.h>
+#include <unordered_map>
 
 #define LOG_TAG "CapturePipeline"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -28,15 +29,18 @@ ResultCode CapturePipeline::configure(const PipelineConfig& config) {
 
 void CapturePipeline::enableAlgorithm(AlgorithmId id, bool enable) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    switch (id) {
-        case AlgorithmId::DENOISE: m_control.preferDenoise = enable; break;
-        case AlgorithmId::SHARPEN: m_control.preferSharpen = enable; break;
-        case AlgorithmId::HDR: m_control.preferHdr = enable; break;
-        case AlgorithmId::CLAHE: m_control.preferClahe = enable; break;
-        case AlgorithmId::SATURATION: m_control.preferSaturation = enable; break;
-        case AlgorithmId::BOKEH: m_control.preferBokeh = enable; break;
-        default: break;
-    }
+    // Maps each toggleable algorithm to the prefer flag it controls, so the
+    // enable/disable switch stays in one place and matches CaptureDecision.
+    static const std::unordered_map<AlgorithmId, bool SessionControl::*> kFlags = {
+        {AlgorithmId::DENOISE, &SessionControl::preferDenoise},
+        {AlgorithmId::SHARPEN, &SessionControl::preferSharpen},
+        {AlgorithmId::HDR, &SessionControl::preferHdr},
+        {AlgorithmId::CLAHE, &SessionControl::preferClahe},
+        {AlgorithmId::SATURATION, &SessionControl::preferSaturation},
+        {AlgorithmId::BOKEH, &SessionControl::preferBokeh},
+    };
+    const auto it = kFlags.find(id);
+    if (it != kFlags.end()) m_control.*(it->second) = enable;
 }
 
 void CapturePipeline::setAlgorithmParam(AlgorithmId id, const std::string& key, float value) {
