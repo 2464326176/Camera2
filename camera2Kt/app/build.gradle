@@ -1,0 +1,133 @@
+/*
+ * Copyright 2024 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply plugin: 'kotlin-kapt'
+apply plugin: "androidx.navigation.safeargs"
+
+android {
+    namespace 'com.example.android.camera2.integration'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.android.camera2.integration"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    buildFeatures {
+        viewBinding true
+        dataBinding true
+        buildConfig true
+    }
+
+    // Allow multiple source dirs for HdrViewfinder (main/common/template layout)
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java']
+            res.srcDirs = ['src/main/res']
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/LICENSE.txt', 'META-INF/NOTICE', 'META-INF/NOTICE.txt']
+        }
+    }
+}
+
+dependencies {
+    // Kotlin
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.7.3'
+
+    // Core / App compat / UI
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.3'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.3'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.viewpager2:viewpager2:1.1.0'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.concurrent:concurrent-futures-ktx:1.1.0'
+
+    // Navigation
+    def nav_version = '2.7.7'
+    implementation "androidx.navigation:navigation-fragment-ktx:$nav_version"
+    implementation "androidx.navigation:navigation-ui-ktx:$nav_version"
+
+    // Glide
+    implementation 'com.github.bumptech.glide:glide:4.12.0'
+    kapt 'com.github.bumptech.glide:compiler:4.12.0'
+
+    // EXIF Interface
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
+
+    // Coil (CameraXExtensions)
+    implementation "io.coil-kt:coil:2.4.0"
+
+    // Dynamic animation (CameraXExtensions spring effects)
+    implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+
+    // CameraX
+    def camerax_version = "1.4.1"
+    implementation "androidx.camera:camera-core:$camerax_version"
+    implementation "androidx.camera:camera-camera2:$camerax_version"
+    implementation "androidx.camera:camera-lifecycle:$camerax_version"
+    implementation "androidx.camera:camera-view:$camerax_version"
+    implementation "androidx.camera:camera-video:$camerax_version"
+    implementation "androidx.camera:camera-extensions:$camerax_version"
+    implementation "androidx.camera:camera-mlkit-vision:$camerax_version"
+
+    // MLKit barcode scanning (CameraX-MLKit)
+    implementation 'com.google.mlkit:barcode-scanning:17.0.2'
+
+    // TensorFlow Lite (CameraXAdvanced)
+    implementation 'org.tensorflow:tensorflow-lite:2.9.0'
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.2'
+
+    // Test
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'androidx.test.ext:junit:1.2.1'
+    testImplementation 'org.robolectric:robolectric:4.4'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}

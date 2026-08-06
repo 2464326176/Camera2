@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Copyright 2024 The Android Open Source Project
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~     https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Permissions required by the integrated samples -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <uses-feature android:name="android.hardware.camera.any" />
+    <uses-feature android:name="android.hardware.camera.raw" android:required="false" />
+
+    <application
+        android:name="com.example.android.camera2.integration.cameraxext.app.CameraExtensionsApplication"
+        android:allowBackup="true"
+        android:fullBackupContent="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/integration_app_name"
+        android:theme="@style/IntegrationAppTheme"
+        tools:ignore="GoogleAppIndexingWarning">
+
+        <!-- Unified launcher / main menu -->
+        <activity
+            android:name="com.example.android.camera2.integration.MainActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Camera2Basic -->
+        <activity
+            android:name="com.example.android.camera2.integration.basic.CameraActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- Camera2Extensions -->
+        <activity
+            android:name="com.example.android.camera2.integration.extensions.CameraActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- Camera2SlowMotion -->
+        <activity
+            android:name="com.example.android.camera2.integration.slowmo.CameraActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- Camera2Video -->
+        <activity
+            android:name="com.example.android.camera2.integration.video.CameraActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- CameraXBasic -->
+        <activity
+            android:name="com.example.android.camera2.integration.cameraxbasic.MainActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- CameraXVideo -->
+        <activity
+            android:name="com.example.android.camera2.integration.cameraxvideo.MainActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- CameraX-MLKit -->
+        <activity
+            android:name="com.example.android.camera2.integration.mlkit.MainActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- CameraXAdvanced (TFLite) -->
+        <activity
+            android:name="com.example.android.camera2.integration.advanced.CameraActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- CameraXExtensions (Compose) -->
+        <activity
+            android:name="com.example.android.camera2.integration.cameraxext.MainActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- HdrViewfinder -->
+        <activity
+            android:name="com.example.android.camera2.integration.hdr.HdrViewfinderActivity"
+            android:exported="true"
+            android:theme="@style/IntegrationAppTheme" />
+
+        <!-- Shared FileProvider used by Camera2Video, Camera2SlowMotion and CameraXExtensions
+             to share captured photos/videos with other apps via content URIs. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>
